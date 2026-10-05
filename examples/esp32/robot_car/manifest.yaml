@@ -1,0 +1,42 @@
+spec_version: "0.1"
+
+device:
+  id: robot_car_01
+  type: mobile_robot
+  name: ESP32-S3 Robot Car
+  metadata:
+    platform: esp32-s3
+
+capabilities:
+  - name: camera.capture
+    description: Capture one image from the front camera.
+    kind: sensor
+
+  - name: servo.pan
+    description: Rotate the camera pan servo.
+    kind: action
+    parameters:
+      type: object
+      properties:
+        angle:
+          type: number
+          minimum: -90
+          maximum: 90
+      required: [angle]
+
+  - name: led.set
+    description: Set the status LED.
+    kind: action
+    parameters:
+      type: object
+      properties:
+        on:
+          type: boolean
+      required: [on]
+
+  - name: motor.stop
+    description: Stop the robot immediately.
+    kind: action
+    safety:
+      local_allowed: true
+      emergency: true
