@@ -1,0 +1,46 @@
+spec_version: "0.1"
+
+device:
+  id: robot_car_01
+  type: mobile_robot
+  name: Classroom Robot Car
+  metadata:
+    vendor: dc-device-demo
+    transport: http
+
+capabilities:
+  - name: camera.capture
+    description: Capture one frame from the front camera.
+    kind: sensor
+    returns:
+      type: image
+
+  - name: motor.move
+    description: Move the robot in the requested direction.
+    kind: action
+    parameters:
+      speed:
+        type: number
+        minimum: 0
+        maximum: 1
+      direction:
+        type: string
+        enum: [forward, backward, left, right]
+    safety:
+      requires_confirmation: false
+      local_allowed: true
+      max_rate_hz: 10
+
+  - name: motor.stop
+    description: Immediately stop all drive motors.
+    kind: action
+    safety:
+      local_allowed: true
+      emergency: true
+
+  - name: led.set
+    description: Set the status LED state.
+    kind: action
+    parameters:
+      on:
+        type: boolean
