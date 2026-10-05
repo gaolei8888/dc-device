@@ -1,0 +1,18 @@
+board:
+  id: esp32-s3-generic
+  platform: esp32
+  framework: esp-idf
+
+pins:
+  status_led: 2
+  servo_pan: 18
+  servo_tilt: 19
+
+capabilities:
+  - led.set
+  - servo.pan
+  - servo.tilt
+
+notes:
+  - Override pin assignments per board/device.
+  - Camera pins are intentionally not fixed in the generic profile.
