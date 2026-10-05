@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dc-device"
+version = "0.1.0.dev0"
+description = "Model-agnostic device capability layer for AI agents"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "dc-device contributors" }]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dc_device*"]
