@@ -1,0 +1,11 @@
+menu "dc-device robot car"
+
+config DC_DEVICE_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+
+config DC_DEVICE_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+
+endmenu
