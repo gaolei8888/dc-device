@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dc-device.dev/schema/device-capability-v0.1.json",
+  "title": "dc-device Device Capability Manifest",
+  "type": "object",
+  "required": [
+    "spec_version",
+    "device",
+    "capabilities"
+  ],
+  "properties": {
+    "spec_version": {
+      "type": "string",
+      "const": "0.1"
+    },
+    "device": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "kind"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "sensor",
+              "action",
+              "stream"
+            ]
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "returns": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "safety": {
+            "type": "object",
+            "properties": {
+              "requires_confirmation": {
+                "type": "boolean",
+                "default": false
+              },
+              "local_allowed": {
+                "type": "boolean",
+                "default": true
+              },
+              "emergency": {
+                "type": "boolean",
+                "default": false
+              },
+              "max_rate_hz": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
