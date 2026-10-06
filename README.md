@@ -37,6 +37,7 @@ The goal is simple:
 5. **Safety-first** — permissions, limits, confirmation rules, and emergency actions are part of the capability description.
 6. **Offline-friendly** — local execution remains possible without a cloud model.
 7. **Reuse existing protocols** — dc-device sits above MQTT, Modbus, CAN, ROS 2, HTTP, USB, serial, and vendor protocols instead of replacing them.
+8. **Health-aware** — every device should expose a standard self-test, health status, and diagnostics contract.
 
 ## Core concept: Device Capability Manifest
 
@@ -75,10 +76,64 @@ capabilities:
 
 An agent runtime can translate the same manifest into MCP tools, OpenAI tools, Claude tools, Gemini function calls, or a local model's tool schema.
 
+## Standard device health contract
+
+Hardware-specific self-test execution belongs in `dc-device`. A device adapter should expose a common health interface such as:
+
+```text
+self_test()
+health_check()
+get_status()
+diagnostics()
+```
+
+A normalized result should distinguish device health from system-level task decisions:
+
+```yaml
+device_id: camera_01
+status: degraded
+
+checks:
+  connection: ok
+  stream: ok
+  fps: warning
+  temperature: ok
+
+issues:
+  - code: LOW_FPS
+    severity: warning
+    message: fps below expected threshold
+```
+
+`dc-device` answers: **"Is this device healthy, and what exactly is wrong?"**
+
+It does not decide whether the whole system may proceed. That decision belongs to `dc-edge`.
+
+## One-click hardware readiness goal
+
+The three hardware projects share a product-level goal:
+
+> **A user should be able to connect multiple devices and complete discovery, identification, self-test, health reporting, capability registration, and readiness assessment with one action.**
+
+For `dc-device`, this means every supported device must provide enough standardized information for `dc-edge` to automate:
+
+```text
+discover
+→ identify
+→ load adapter/profile
+→ self_test
+→ report health
+→ expose capabilities
+```
+
+The long-term target is zero-touch device onboarding: users should not need to understand ports, drivers, IP addresses, vendor SDK details, or protocol internals for normal supported hardware.
+
 ## Initial scope
 
 ### v0.1
 - Device Capability Manifest
+- standardized device identity / profile
+- standardized self-test and health contract
 - Python SDK
 - C++ SDK
 - Linux reference device
@@ -86,14 +141,15 @@ An agent runtime can translate the same manifest into MCP tools, OpenAI tools, C
 - DCO-Edge reference adapter
 - HTTP / WebSocket transport
 - basic safety constraints
-- device simulator
+- device discovery primitives
+- device simulator compatibility
 
 ### Later
 - MQTT transport
 - Modbus adapter
 - CAN adapter
 - ROS 2 adapter
-- device discovery
+- automatic adapter matching
 - authentication / identity
 - telemetry and events
 - remote lifecycle management
@@ -103,7 +159,7 @@ An agent runtime can translate the same manifest into MCP tools, OpenAI tools, C
 
 ```text
 dc-device/
-├── schemas/          # capability and device schemas
+├── schemas/          # capability, device, health and diagnostics schemas
 ├── sdk/
 │   ├── python/       # Python SDK
 │   └── cpp/          # C++ SDK
@@ -115,22 +171,22 @@ dc-device/
 └── tests/
 ```
 
-## Relationship with DCO-Edge
+## Relationship with dc-edge and dc-device-sim
 
-`DCO-Edge` is the first reference runtime for `dc-device`.
-
-- **dc-device** defines how devices describe and expose capabilities.
-- **DCO-Edge** discovers those capabilities, applies local policy and safety, executes tasks, and exposes them to agents.
-- **DCO** may orchestrate higher-level tasks, but dc-device does not require DCO.
+- **dc-device** defines how real devices describe capabilities, identity, health, self-test and diagnostics.
+- **dc-edge** discovers devices, launches one-click system checks, applies policy and safety, orchestrates devices, and decides READY / DEGRADED / BLOCKED.
+- **dc-device-sim** implements the same contracts for virtual devices and adds controlled fault injection so system recovery can be tested before touching real hardware.
 
 ```text
-DCO / Other Agent Runtime
-          |
-      DCO-Edge
-          |
-      dc-device
-          |
-       Devices
+                  dc-edge
+                     |
+             capability + health
+                     |
+          +----------+----------+
+          |                     |
+      dc-device          dc-device-sim
+          |                     |
+   real hardware         virtual hardware
 ```
 
 ## What dc-device is not
@@ -142,15 +198,15 @@ DCO / Other Agent Runtime
 - not tied to DCT
 - not tied to a cloud model
 
-It is the **AI-facing device abstraction layer** above those technologies.
+It is the **AI-facing physical capability and device-health abstraction layer** above those technologies.
 
 ## First demo target
 
 The first end-to-end demo should be deliberately small:
 
-> An ESP32-S3 device registers a camera/LED/servo capability, DCO-Edge discovers it, and an agent can say: **"If you see a red object, point the servo toward it and turn on the LED."**
+> An ESP32-S3 device registers a camera/LED/servo capability, DCO-Edge discovers it, runs its self-test automatically, and an agent can say: **"If you see a red object, point the servo toward it and turn on the LED."**
 
-That demo proves the full path from **AI intent → device capability → safe physical action**.
+That demo proves the full path from **device discovery → self-test → readiness → AI intent → safe physical action**.
 
 ## Status
 
