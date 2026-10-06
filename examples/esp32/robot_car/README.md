@@ -6,6 +6,7 @@ This is the first real-hardware reference implementation for dc-device.
 
 - `GET /health`
 - `GET /manifest`
+- `GET /status`, `GET /diagnostics`, `POST /self_test` (see below)
 - `POST /invoke`
 - `led.set(on)`
 - `servo.pan(angle)`
@@ -42,6 +43,22 @@ it with `HttpServer` (default port 8787). Responses follow
 | unknown capability | 404 | `{"ok":false,"error":"UnknownCapability",...}` |
 | hardware failure | 500 | `{"ok":false,"error":"DeviceError",...}` |
 | body over 2 KiB | 413 | `{"ok":false,"error":"PayloadTooLarge",...}` |
+
+## Health
+
+Follows `docs/health-contract-v0.1.md`. `/health` is liveness only.
+
+- `GET /status` runs the read-only checks `led` and `servo` (did the GPIO / PWM initialise at boot).
+- `POST /self_test` also runs `led_blink` and `servo_sweep`. **The servo moves** (-30, 30, then back to centre) and the LED blinks. The request takes about 1.5 s.
+- `GET /diagnostics` reports uptime, free heap, and the last self-test result. It never moves anything.
+
+```bash
+curl http://<esp32-ip>:8787/status
+curl -X POST http://<esp32-ip>:8787/self_test
+curl http://<esp32-ip>:8787/diagnostics
+```
+
+## Invoke
 
 ```bash
 curl http://<esp32-ip>:8787/manifest

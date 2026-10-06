@@ -228,7 +228,114 @@ static void test_invoke() {
     CHECK(json::parse(r.body, parsed, err));
 }
 
+static Endpoint make_health_endpoint(int* sweeps) {
+    Endpoint ep("cam_01", "camera", "Test Camera");
+    CHECK(ep.add_health_check("connection", [] { return CheckResult::ok(); }));
+    CHECK(ep.add_health_check("fps", [] {
+        return CheckResult::warning("LOW_FPS", "fps below expected threshold");
+    }));
+    CHECK(ep.add_self_test("sweep", [sweeps] {
+        ++*sweeps;
+        return CheckResult::ok();
+    }));
+    CHECK(ep.add_diagnostic("firmware", [] { return std::string("\"0.1.0\""); }));
+    CHECK(ep.add_diagnostic("heap", [] { return std::string("{\"free\":1234}"); }));
+    CHECK(ep.add_diagnostic("bad", [] { return std::string("{oops"); }));
+    return ep;
+}
+
+static void test_health_registration() {
+    Endpoint ep("id", "t", "n");
+    auto ok = [] { return CheckResult::ok(); };
+    CHECK(ep.add_health_check("a", ok));
+    CHECK(!ep.add_health_check("a", ok));  // duplicate
+    CHECK(!ep.add_self_test("a", ok));     // duplicate across registries
+    CHECK(!ep.add_health_check("", ok));
+    CHECK(!ep.add_health_check("b", nullptr));
+    CHECK(!ep.add_diagnostic("", [] { return std::string("1"); }));
+    CHECK(ep.add_diagnostic("d", [] { return std::string("1"); }));
+    CHECK(!ep.add_diagnostic("d", [] { return std::string("2"); }));
+}
+
+static void test_health_routes() {
+    Endpoint empty("dev1", "t", "n");
+    CHECK_EQ(empty.handle("GET", "/status", "").body,
+             R"({"device_id":"dev1","status":"ok","checks":{},"issues":[]})");
+
+    int sweeps = 0;
+    Endpoint ep = make_health_endpoint(&sweeps);
+
+    // /health stays plain liveness even when a check warns.
+    CHECK_EQ(ep.handle("GET", "/health", "").body, R"({"status":"ok","device_id":"cam_01"})");
+
+    Response r = ep.handle("GET", "/status", "");
+    CHECK(r.status == 200);
+    CHECK_EQ(r.body,
+        R"({"device_id":"cam_01","status":"degraded","checks":{"connection":"ok","fps":"warning"},)"
+        R"("issues":[{"code":"LOW_FPS","severity":"warning","check":"fps",)"
+        R"("message":"fps below expected threshold"}]})");
+    CHECK(sweeps == 0);  // /status never runs self tests
+
+    r = ep.handle("GET", "/diagnostics", "");
+    CHECK(sweeps == 0);  // nor does /diagnostics
+    json::Value d;
+    std::string err;
+    CHECK(json::parse(r.body, d, err));
+    CHECK_EQ(d.find("device_id")->string, "cam_01");
+    CHECK_EQ(d.find("status")->string, "degraded");
+    CHECK(d.find("uptime_s")->number >= 0);
+    CHECK(d.find("capability_count")->number == 0);
+    CHECK(d.find("last_self_test")->is_null());
+    CHECK_EQ(d.find("info")->find("firmware")->string, "0.1.0");
+    CHECK(d.find("info")->find("heap")->find("free")->number == 1234);
+    CHECK(d.find("info")->find("bad")->find("error") != nullptr);  // contained
+
+    r = ep.handle("POST", "/self_test", "");
+    CHECK(r.status == 200);
+    CHECK(sweeps == 1);
+    CHECK(json::parse(r.body, d, err));
+    CHECK_EQ(d.find("status")->string, "degraded");
+    CHECK_EQ(d.find("checks")->find("sweep")->string, "ok");
+    CHECK(d.find("checks")->keys.size() == 3);
+
+    // The self-test report is now remembered by diagnostics.
+    std::string self_test_body = r.body;
+    r = ep.handle("GET", "/diagnostics", "");
+    CHECK(json::parse(r.body, d, err));
+    CHECK(d.find("last_self_test")->is_object());
+    CHECK_EQ(d.find("last_self_test")->find("checks")->find("sweep")->string, "ok");
+    CHECK(sweeps == 1);
+
+    // Wrong methods are 404, like the other routes.
+    CHECK(ep.handle("POST", "/status", "").status == 404);
+    CHECK(ep.handle("POST", "/diagnostics", "").status == 404);
+    CHECK(ep.handle("GET", "/self_test", "").status == 404);
+}
+
+static void test_health_states() {
+    Endpoint ep("dev", "t", "n");
+    ep.add_health_check("w", [] { return CheckResult::warning("", ""); });
+    ep.add_health_check("s", [] { return CheckResult::skipped(); });
+    json::Value v;
+    std::string err;
+    CHECK(json::parse(ep.status(), v, err));
+    CHECK_EQ(v.find("status")->string, "degraded");
+    CHECK_EQ(v.find("checks")->find("s")->string, "skipped");
+    CHECK(v.find("issues")->items.size() == 1);  // skipped raises no issue
+    CHECK_EQ(v.find("issues")->items[0].find("code")->string, "CHECK_WARNING");
+    CHECK(!v.find("issues")->items[0].find("message")->string.empty());
+
+    ep.add_health_check("f", [] { return CheckResult::failed("NO_STREAM", "gone \"away\""); });
+    CHECK(json::parse(ep.status(), v, err));  // quotes in messages stay valid JSON
+    CHECK_EQ(v.find("status")->string, "failed");  // failed beats warning
+    CHECK_EQ(v.find("issues")->items[1].find("severity")->string, "error");
+    CHECK_EQ(v.find("issues")->items[1].find("message")->string, "gone \"away\"");
+}
+
 int main() {
+    test_health_registration();
+    test_health_routes();
+    test_health_states();
     test_json();
     test_registration();
     test_routes();

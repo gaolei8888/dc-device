@@ -33,7 +33,7 @@ ledc_set_duty(...)
 | `dc_device_esp32` | GPIO / PWM / servo | on device only |
 | `dc_device_wifi` | Wi-Fi station | on device only |
 | `dc_device_json` | exception-free JSON parser/writer | no |
-| `dc_device_endpoint` | HTTP Transport v0.1 core: `(method, path, body) -> response` | no |
+| `dc_device_endpoint` | HTTP Transport v0.1 + health contract core: `(method, path, body) -> response` | no |
 | `dc_device_http_server` | binds an `Endpoint` to `esp_http_server` | on device only |
 
 The endpoint core has host tests: `tests/esp32/run.sh`.

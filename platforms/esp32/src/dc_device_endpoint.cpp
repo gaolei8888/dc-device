@@ -41,6 +41,133 @@ bool Endpoint::add(CapabilitySpec spec) {
     return true;
 }
 
+bool Endpoint::name_taken(const std::string& name) const {
+    for (const auto& c : health_checks_) {
+        if (c.name == name) return true;
+    }
+    for (const auto& c : self_tests_) {
+        if (c.name == name) return true;
+    }
+    return false;
+}
+
+bool Endpoint::add_health_check(std::string name, HealthCheck check) {
+    if (name.empty() || !check || name_taken(name)) {
+        return false;
+    }
+    health_checks_.push_back({std::move(name), std::move(check)});
+    return true;
+}
+
+bool Endpoint::add_self_test(std::string name, HealthCheck check) {
+    if (name.empty() || !check || name_taken(name)) {
+        return false;
+    }
+    self_tests_.push_back({std::move(name), std::move(check)});
+    return true;
+}
+
+bool Endpoint::add_diagnostic(std::string name, DiagnosticProvider provider) {
+    if (name.empty() || !provider) {
+        return false;
+    }
+    for (const auto& d : diagnostics_) {
+        if (d.first == name) return false;
+    }
+    diagnostics_.emplace_back(std::move(name), std::move(provider));
+    return true;
+}
+
+std::string Endpoint::report(const std::vector<const NamedCheck*>& checks,
+                             std::string* status_out) const {
+    std::string states;
+    std::string issues;
+    bool any_failed = false;
+    bool any_warning = false;
+
+    for (const NamedCheck* named : checks) {
+        CheckResult result = named->check();
+        const char* state = "ok";
+        const char* severity = nullptr;
+        const char* default_code = nullptr;
+        switch (result.state) {
+            case CheckResult::State::Ok: break;
+            case CheckResult::State::Skipped: state = "skipped"; break;
+            case CheckResult::State::Warning:
+                state = "warning"; severity = "warning"; default_code = "CHECK_WARNING";
+                any_warning = true;
+                break;
+            case CheckResult::State::Failed:
+                state = "failed"; severity = "error"; default_code = "CHECK_FAILED";
+                any_failed = true;
+                break;
+        }
+        if (!states.empty()) states += ',';
+        states += json::quote(named->name) + ":\"" + state + "\"";
+
+        if (severity != nullptr) {
+            if (!issues.empty()) issues += ',';
+            issues += "{\"code\":" +
+                      json::quote(result.code.empty() ? default_code : result.code) +
+                      ",\"severity\":\"" + severity + "\",\"check\":" +
+                      json::quote(named->name) + ",\"message\":" +
+                      json::quote(result.message.empty()
+                                      ? "Check " + named->name + " reported " + state
+                                      : result.message) +
+                      "}";
+        }
+    }
+
+    const char* status = any_failed ? "failed" : any_warning ? "degraded" : "ok";
+    if (status_out != nullptr) {
+        *status_out = status;
+    }
+    return "{\"device_id\":" + json::quote(id_) + ",\"status\":\"" + status +
+           "\",\"checks\":{" + states + "},\"issues\":[" + issues + "]}";
+}
+
+std::string Endpoint::status() const {
+    std::vector<const NamedCheck*> checks;
+    for (const auto& c : health_checks_) checks.push_back(&c);
+    return report(checks, nullptr);
+}
+
+std::string Endpoint::self_test() const {
+    // esp_http_server runs handlers on one task, so self tests never overlap.
+    std::vector<const NamedCheck*> checks;
+    for (const auto& c : health_checks_) checks.push_back(&c);
+    for (const auto& c : self_tests_) checks.push_back(&c);
+    last_self_test_ = report(checks, nullptr);
+    return last_self_test_;
+}
+
+std::string Endpoint::diagnostics() const {
+    std::vector<const NamedCheck*> checks;
+    for (const auto& c : health_checks_) checks.push_back(&c);
+    std::string status;
+    report(checks, &status);
+
+    std::string info;
+    for (const auto& d : diagnostics_) {
+        std::string value = d.second();
+        json::Value parsed;
+        std::string error;
+        if (!json::parse(value, parsed, error)) {
+            value = "{\"error\":" + json::quote("Provider returned invalid JSON: " + error) + "}";
+        }
+        if (!info.empty()) info += ',';
+        info += json::quote(d.first) + ":" + value;
+    }
+
+    double uptime_s = std::chrono::duration<double>(
+                          std::chrono::steady_clock::now() - started_).count();
+    return "{\"device_id\":" + json::quote(id_) + ",\"status\":\"" + status +
+           "\",\"uptime_s\":" + json::number(uptime_s) +
+           ",\"capability_count\":" + std::to_string(capabilities_.size()) +
+           ",\"last_self_test\":" + (last_self_test_.empty() ? "null" : last_self_test_) +
+           ",\"info\":{" + info + "}}";
+}
+
 std::string Endpoint::manifest() const {
     std::string out = "{\"spec_version\":\"0.1\",\"device\":{";
     out += "\"id\":" + json::quote(id_);
@@ -75,6 +202,15 @@ Response Endpoint::handle(const std::string& method,
     }
     if (method == "GET" && path == "/manifest") {
         return {200, manifest()};
+    }
+    if (method == "GET" && path == "/status") {
+        return {200, status()};
+    }
+    if (method == "GET" && path == "/diagnostics") {
+        return {200, diagnostics()};
+    }
+    if (method == "POST" && path == "/self_test") {
+        return {200, self_test()};
     }
     if (method == "POST" && path == "/invoke") {
         return invoke(body);
