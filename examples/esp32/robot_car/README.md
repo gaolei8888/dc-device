@@ -16,17 +16,38 @@ Requires ESP-IDF.
 
 ```bash
 idf.py set-target esp32s3
+idf.py menuconfig        # dc-device robot car -> Wi-Fi SSID / password / HTTP port
 idf.py build
 idf.py flash monitor
 ```
 
 ## Wi-Fi
 
-Wi-Fi connection setup is intentionally left application-specific in this first commit.
+The app connects with `connect_wifi()` using the SSID and password from
+`menuconfig`. The HTTP server starts only after an IP address is obtained.
+If the SSID is empty or the connection fails, the error is logged and the
+server does not start.
 
-The device must obtain an IP address before `start_http_server()` is useful.
+## HTTP endpoint
 
-The next step is to add a reusable Wi-Fi transport/config module.
+`main.cpp` registers capabilities on a `dc_device::esp32::Endpoint` and serves
+it with `HttpServer` (default port 8787). Responses follow
+`docs/http-transport-v0.1.md` and the Python reference server:
+
+| Case | Status | Body |
+|---|---|---|
+| success | 200 | `{"ok":true,"capability":...,"result":...}` |
+| malformed request | 400 | `{"ok":false,"error":"InvalidRequest",...}` |
+| bad arguments | 400 | `{"ok":false,"error":"InvalidArguments",...}` |
+| unknown capability | 404 | `{"ok":false,"error":"UnknownCapability",...}` |
+| hardware failure | 500 | `{"ok":false,"error":"DeviceError",...}` |
+| body over 2 KiB | 413 | `{"ok":false,"error":"PayloadTooLarge",...}` |
+
+```bash
+curl http://<esp32-ip>:8787/manifest
+curl -X POST http://<esp32-ip>:8787/invoke \
+  -d '{"capability":"servo.pan","arguments":{"angle":30}}'
+```
 
 ## DCO-Edge
 

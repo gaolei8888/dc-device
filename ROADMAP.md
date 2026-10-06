@@ -17,7 +17,7 @@ Goal: one real device, one edge runtime, one AI-driven physical action.
 - [x] add ESP32-S3 generic board profile
 - [x] add ESP32 robot-car capability manifest
 - [x] add capability invocation tests
-- [ ] implement ESP32 HTTP endpoint
+- [x] implement ESP32 HTTP endpoint
 - [ ] implement GPIO / PWM / servo backend with ESP-IDF
 - [ ] implement camera capability
 - [ ] add parameter validation
