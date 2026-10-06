@@ -18,6 +18,11 @@ Goal: one real device, one edge runtime, one AI-driven physical action.
 - [x] add ESP32 robot-car capability manifest
 - [x] add capability invocation tests
 - [x] implement ESP32 HTTP endpoint
+- [x] define health contract (`/status`, `/diagnostics`, `POST /self_test`)
+- [x] health contract in Python SDK
+- [ ] health contract on ESP32
+- [ ] device identity / profile
+- [ ] device discovery primitives
 - [ ] implement GPIO / PWM / servo backend with ESP-IDF
 - [ ] implement camera capability
 - [ ] add parameter validation

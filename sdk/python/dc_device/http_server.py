@@ -37,6 +37,14 @@ class DeviceRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, self.device.manifest())
             return
 
+        if path == "/status":
+            self._send_json(200, self.device.get_status())
+            return
+
+        if path == "/diagnostics":
+            self._send_json(200, self.device.diagnostics())
+            return
+
         self._send_json(404, {"error": "not_found"})
 
     def do_POST(self) -> None:
@@ -45,6 +53,9 @@ class DeviceRequestHandler(BaseHTTPRequestHandler):
             return
 
         path = urlparse(self.path).path
+        if path == "/self_test":
+            self._send_json(200, self.device.self_test())
+            return
         if path != "/invoke":
             self._send_json(404, {"error": "not_found"})
             return
@@ -73,12 +84,16 @@ class DeviceRequestHandler(BaseHTTPRequestHandler):
             )
 
 
-def serve(device: Device, host: str = "0.0.0.0", port: int = 8787) -> None:
+def make_server(device: Device, host: str = "0.0.0.0", port: int = 8787) -> ThreadingHTTPServer:
     handler = type(
         "BoundDeviceRequestHandler",
         (DeviceRequestHandler,),
         {"device": device},
     )
-    server = ThreadingHTTPServer((host, port), handler)
+    return ThreadingHTTPServer((host, port), handler)
+
+
+def serve(device: Device, host: str = "0.0.0.0", port: int = 8787) -> None:
+    server = make_server(device, host, port)
     print(f"dc-device serving {device.device_id} on http://{host}:{port}")
     server.serve_forever()

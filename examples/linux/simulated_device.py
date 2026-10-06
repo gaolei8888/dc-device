@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 
-from dc_device import Capability, Device, serve
+from dc_device import Capability, CheckResult, Device, serve
 
 state = {"led_on": False, "servo_angle": 90.0}
 
@@ -53,6 +53,16 @@ device.register(Capability(
     },
     safety={"max_rate_hz":5},
 ))
+
+device.add_health_check("connection", lambda: "ok")
+
+def servo_sweep() -> CheckResult:
+    for angle in (0, 180, 90):
+        move_servo(angle)
+    return CheckResult("ok")
+
+device.add_self_test("servo_sweep", servo_sweep)
+device.add_diagnostic("firmware", lambda: "linux-reference-0.1.0")
 
 if __name__ == "__main__":
     serve(device, host="127.0.0.1", port=8787)

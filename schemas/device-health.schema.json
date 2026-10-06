@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dc-device.dev/schema/device-health-v0.1.json",
+  "title": "dc-device Health Report",
+  "description": "Result of get_status() / self_test(). Describes device health only; READY / DEGRADED / BLOCKED system decisions belong to dc-edge.",
+  "type": "object",
+  "required": ["device_id", "status", "checks", "issues"],
+  "properties": {
+    "device_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "description": "Worst check outcome: failed if any check failed, else degraded if any check warned, else ok.",
+      "enum": ["ok", "degraded", "failed"]
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": ["ok", "warning", "failed", "skipped"]
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "severity", "message"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z0-9_]+$"
+          },
+          "severity": {
+            "description": "warning comes from a warning check, error from a failed check.",
+            "enum": ["warning", "error"]
+          },
+          "message": {
+            "type": "string"
+          },
+          "check": {
+            "description": "Name of the check that raised the issue.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

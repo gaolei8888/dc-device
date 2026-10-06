@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dc-device.dev/schema/device-diagnostics-v0.1.json",
+  "title": "dc-device Diagnostics",
+  "description": "Result of diagnostics(): read-only detail for troubleshooting. Never actuates hardware.",
+  "type": "object",
+  "required": ["device_id", "status", "uptime_s", "capability_count", "last_self_test", "info"],
+  "properties": {
+    "device_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": ["ok", "degraded", "failed"]
+    },
+    "uptime_s": {
+      "type": "number",
+      "minimum": 0
+    },
+    "capability_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "last_self_test": {
+      "description": "The most recent self_test() report, or null if none has run since boot.",
+      "oneOf": [
+        { "$ref": "device-health-v0.1.json" },
+        { "type": "null" }
+      ]
+    },
+    "info": {
+      "description": "Free-form device-specific facts such as firmware version or free heap.",
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

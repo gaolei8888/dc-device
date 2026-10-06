@@ -13,7 +13,7 @@ class DeviceHttpClient:
         with urlopen(self.base_url + path, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def _post(self, path: str, payload: dict[str, Any]) -> Any:
+    def _post(self, path: str, payload: dict[str, Any], timeout: float = 10) -> Any:
         body = json.dumps(payload).encode("utf-8")
         request = Request(
             self.base_url + path,
@@ -21,11 +21,21 @@ class DeviceHttpClient:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urlopen(request, timeout=10) as response:
+        with urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def health(self) -> Any:
         return self._get("/health")
+
+    def status(self) -> Any:
+        return self._get("/status")
+
+    def diagnostics(self) -> Any:
+        return self._get("/diagnostics")
+
+    def self_test(self) -> Any:
+        # Self-tests can take a while (they may move hardware).
+        return self._post("/self_test", {}, timeout=30)
 
     def manifest(self) -> Any:
         return self._get("/manifest")

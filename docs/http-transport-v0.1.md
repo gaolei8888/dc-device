@@ -12,6 +12,11 @@ Returns liveness and device identity.
 
 Returns the Device Capability Manifest.
 
+### GET /status, GET /diagnostics, POST /self_test
+
+Health reporting. See `health-contract-v0.1.md`. `/health` remains a pure
+liveness probe.
+
 ### POST /invoke
 
 Request:
