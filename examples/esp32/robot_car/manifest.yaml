@@ -34,6 +34,33 @@ capabilities:
           type: boolean
       required: [on]
 
+  - name: motor.move
+    description: Drive the robot in a direction for a bounded time.
+    kind: action
+    parameters:
+      type: object
+      properties:
+        direction:
+          type: string
+          enum: [forward, backward, left, right]
+        speed:
+          type: number
+          minimum: 0
+          maximum: 1
+        duration_s:
+          type: number
+          minimum: 0
+          maximum: 5
+      required: [direction, speed, duration_s]
+    returns:
+      type: object
+      properties:
+        duration_s:
+          type: number
+    safety:
+      local_allowed: true
+      max_rate_hz: 10
+
   - name: motor.stop
     description: Stop the robot immediately.
     kind: action
