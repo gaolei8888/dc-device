@@ -42,6 +42,9 @@ bool connect_wifi(const WifiConfig& config) {
     s_wifi_event_group = xEventGroupCreate();
     s_max_retries = config.max_retries;
 
+    // Without a default STA netif the interface never gets an IP.
+    esp_netif_create_default_wifi_sta();
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     if (esp_wifi_init(&cfg) != ESP_OK) return false;
 
