@@ -30,9 +30,9 @@ capabilities:
     parameters:
       type: object
       properties:
-        on:
+        "on":
           type: boolean
-      required: [on]
+      required: ["on"]
 
   - name: motor.move
     description: Drive the robot in a direction for a bounded time.
