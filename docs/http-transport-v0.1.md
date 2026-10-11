@@ -47,6 +47,10 @@ Response:
 }
 ```
 
+Errors: 400 `InvalidArguments` (arguments fail the manifest schema or the
+handler), 404 unknown capability, 429 `RateLimited` (`safety.max_rate_hz`,
+see `safety-semantics-v0.1.md`), 500 `DeviceError`.
+
 ## Design rule
 
 Transport is not part of the capability semantics.
