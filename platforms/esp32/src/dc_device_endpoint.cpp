@@ -43,6 +43,75 @@ bool valid_profile_version(const std::string& version) {
     return parts == 2 && digits > 0;
 }
 
+bool values_equal(const json::Value& a, const json::Value& b) {
+    if (a.type != b.type) return false;
+    switch (a.type) {
+        case json::Value::Type::Null: return true;
+        case json::Value::Type::Bool: return a.boolean == b.boolean;
+        case json::Value::Type::Number: return a.number == b.number;
+        case json::Value::Type::String: return a.string == b.string;
+        default: break;
+    }
+    if (a.keys != b.keys || a.items.size() != b.items.size()) return false;
+    for (size_t i = 0; i < a.items.size(); ++i) {
+        if (!values_equal(a.items[i], b.items[i])) return false;
+    }
+    return true;
+}
+
+bool matches_type(const json::Value& value, const std::string& type) {
+    if (type == "number") return value.is_number();
+    if (type == "integer") return value.is_number() && value.number == static_cast<long long>(value.number);
+    if (type == "boolean") return value.is_bool();
+    if (type == "string") return value.is_string();
+    if (type == "object") return value.is_object();
+    if (type == "array") return value.is_array();
+    return true;  // unknown types are not enforced, as in the Python SDK
+}
+
+// Checks arguments against the manifest schema subset the Python SDK enforces:
+// required, type, enum, minimum, maximum. Returns an empty string when valid.
+std::string validate_arguments(const std::string& schema_json, const json::Value& arguments) {
+    json::Value schema;
+    std::string error;
+    if (!json::parse(schema_json, schema, error)) return {};
+    if (const json::Value* required = schema.find("required")) {
+        for (const auto& name : required->items) {
+            if (name.is_string() && arguments.find(name.string) == nullptr) {
+                return "Missing required argument: " + name.string;
+            }
+        }
+    }
+    const json::Value* properties = schema.find("properties");
+    if (properties == nullptr) return {};
+    for (size_t i = 0; i < arguments.keys.size(); ++i) {
+        const std::string& name = arguments.keys[i];
+        const json::Value& value = arguments.items[i];
+        const json::Value* rule = properties->find(name);
+        if (rule == nullptr) continue;
+        const json::Value* type = rule->find("type");
+        if (type != nullptr && type->is_string() && !matches_type(value, type->string)) {
+            return "Argument " + name + " must be of type " + type->string;
+        }
+        if (const json::Value* allowed = rule->find("enum")) {
+            bool found = false;
+            for (const auto& option : allowed->items) found = found || values_equal(option, value);
+            if (!found) return "Argument " + name + " must be one of the allowed values";
+        }
+        if (value.is_number()) {
+            const json::Value* min = rule->find("minimum");
+            if (min != nullptr && min->is_number() && value.number < min->number) {
+                return "Argument " + name + " must be >= " + json::number(min->number);
+            }
+            const json::Value* max = rule->find("maximum");
+            if (max != nullptr && max->is_number() && value.number > max->number) {
+                return "Argument " + name + " must be <= " + json::number(max->number);
+            }
+        }
+    }
+    return {};
+}
+
 Response error_response(int status, const std::string& code, const std::string& message) {
     return {status, error_body(code, message)};
 }
@@ -314,6 +383,10 @@ Response Endpoint::invoke(const std::string& body) const {
     for (const auto& cap : capabilities_) {
         if (cap.name != capability->string) {
             continue;
+        }
+        std::string invalid = validate_arguments(cap.parameters_json, *arguments);
+        if (!invalid.empty()) {
+            return error_response(400, "InvalidArguments", invalid);
         }
         InvokeResult result = cap.handler(*arguments);
         switch (result.status) {

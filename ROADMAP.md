@@ -25,7 +25,7 @@ Goal: one real device, one edge runtime, one AI-driven physical action.
 - [ ] device discovery primitives
 - [ ] implement GPIO / PWM / servo backend with ESP-IDF
 - [ ] implement camera capability
-- [ ] add parameter validation
+- [x] add parameter validation (ESP32 endpoint enforces required, type, enum, minimum, maximum before the handler runs)
 - [ ] add safety policy enforcement
 - [ ] add WebSocket events / streams
 - [ ] demo: red object -> servo + LED on real ESP32-S3

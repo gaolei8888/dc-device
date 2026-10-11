@@ -57,6 +57,8 @@ static Endpoint make_endpoint() {
     servo.name = "servo.pan";
     servo.description = "Rotate the pan servo.";
     servo.kind = "action";
+    servo.parameters_json =
+        R"({"type":"object","properties":{"angle":{"type":"number","minimum":-90,"maximum":90},"mode":{"enum":["fast","slow",1]},"n":{"type":"integer"}},"required":["angle"]})";
     servo.handler = [](const json::Value& args) {
         const json::Value* angle = args.find("angle");
         if (angle == nullptr || !angle->is_number())
@@ -196,6 +198,25 @@ static void test_invoke() {
     r = ep.handle("POST", "/invoke", R"({"capability":"led.set","arguments":null})");
     CHECK(r.status == 400);
     CHECK_EQ(r.body, R"({"ok":false,"error":"InvalidArguments","message":"Missing required argument: on"})");
+
+    // Schema enforcement happens before the handler runs.
+    g_angle = 0;
+    r = ep.handle("POST", "/invoke", R"({"capability":"servo.pan","arguments":{"angle":-91}})");
+    CHECK_EQ(r.body, R"({"ok":false,"error":"InvalidArguments","message":"Argument angle must be >= -90"})");
+    r = ep.handle("POST", "/invoke", R"({"capability":"servo.pan","arguments":{"angle":91}})");
+    CHECK_EQ(r.body, R"({"ok":false,"error":"InvalidArguments","message":"Argument angle must be <= 90"})");
+    r = ep.handle("POST", "/invoke", R"({"capability":"servo.pan","arguments":{}})");
+    CHECK_EQ(r.body, R"({"ok":false,"error":"InvalidArguments","message":"Missing required argument: angle"})");
+    r = ep.handle("POST", "/invoke", R"({"capability":"servo.pan","arguments":{"angle":1,"mode":"warp"}})");
+    CHECK(r.status == 400);
+    r = ep.handle("POST", "/invoke", R"({"capability":"servo.pan","arguments":{"angle":1,"mode":"slow","n":2}})");
+    CHECK(r.status == 200);
+    r = ep.handle("POST", "/invoke", R"({"capability":"servo.pan","arguments":{"angle":1,"mode":1}})");
+    CHECK(r.status == 200);
+    r = ep.handle("POST", "/invoke", R"({"capability":"servo.pan","arguments":{"angle":1,"n":1.5}})");
+    CHECK_EQ(r.body, R"({"ok":false,"error":"InvalidArguments","message":"Argument n must be of type integer"})");
+    r = ep.handle("POST", "/invoke", R"({"capability":"servo.pan","arguments":{"angle":2,"extra":true}})");
+    CHECK(r.status == 200);  // unknown arguments pass, as in the Python SDK
 
     // Hardware failure -> 500
     r = ep.handle("POST", "/invoke", R"({"capability":"hw.fail"})");
