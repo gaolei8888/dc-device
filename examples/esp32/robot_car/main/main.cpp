@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <string>
 
 #include "dc_device_endpoint.hpp"
@@ -8,6 +9,7 @@
 #ifdef ESP_PLATFORM
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
@@ -125,6 +127,27 @@ static CheckResult selftest_servo_sweep() {
     return CheckResult::ok();
 }
 
+static constexpr const char* kFirmwareVersion = "0.1.0";
+
+static void register_identity() {
+    dc_device::esp32::Identity id;
+    id.model = "ESP32-S3 Robot Car";
+    id.firmware_version = kFirmwareVersion;
+    // Must match profiles/esp32-s3-robot-car.profile.json.
+    id.profile_id = "esp32-s3-robot-car";
+    id.profile_version = "0.1.0";
+#ifdef ESP_PLATFORM
+    uint8_t mac[6] = {};
+    if (esp_efuse_mac_get_default(mac) == ESP_OK) {
+        char serial[13];
+        snprintf(serial, sizeof(serial), "%02X%02X%02X%02X%02X%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        id.serial = serial;
+    }
+#endif
+    endpoint.set_identity(std::move(id));
+}
+
 static void register_health() {
     endpoint.add_health_check("led", check_led);
     endpoint.add_health_check("servo", check_servo);
@@ -152,6 +175,7 @@ extern "C" void app_main() {
     servo_ready = pan_servo.begin();
     register_capabilities();
     register_health();
+    register_identity();
 
     dc_device::esp32::WifiConfig wifi;
     wifi.ssid = CONFIG_DC_DEVICE_WIFI_SSID;
@@ -178,6 +202,7 @@ int main() {
     servo_ready = pan_servo.begin();
     register_capabilities();
     register_health();
+    register_identity();
     auto response = endpoint.handle(
         "POST", "/invoke", R"({"capability":"servo.pan","arguments":{"angle":30}})");
     auto self_test = endpoint.handle("POST", "/self_test", "");

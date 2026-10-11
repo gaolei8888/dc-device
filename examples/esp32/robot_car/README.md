@@ -44,6 +44,13 @@ it with `HttpServer` (default port 8787). Responses follow
 | hardware failure | 500 | `{"ok":false,"error":"DeviceError",...}` |
 | body over 2 KiB | 413 | `{"ok":false,"error":"PayloadTooLarge",...}` |
 
+## Identity
+
+`GET /identity` returns the model, firmware version, the MAC as `serial`, and
+the profile `esp32-s3-robot-car@0.1.0` (`profiles/esp32-s3-robot-car.profile.json`).
+`camera.capture` and `motor.move` appear in `manifest.yaml` and are optional in
+the profile, but this firmware does not implement them yet.
+
 ## Health
 
 Follows `docs/health-contract-v0.1.md`. `/health` is liveness only.

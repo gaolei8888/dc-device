@@ -65,6 +65,18 @@ using HealthCheck = std::function<CheckResult()>;
 // Returns any JSON value; invalid JSON is reported as an error entry.
 using DiagnosticProvider = std::function<std::string()>;
 
+// Optional descriptive identity (docs/identity-and-profile-v0.1.md). Empty
+// strings are omitted from GET /identity. Not authentication.
+struct Identity {
+    std::string manufacturer;
+    std::string model;
+    std::string hardware_revision;
+    std::string firmware_version;
+    std::string serial;           // stable hardware-unique id, e.g. MAC
+    std::string profile_id;       // device-class profile; set with profile_version
+    std::string profile_version;  // "major.minor.patch"
+};
+
 struct Response {
     int status = 200;
     std::string body;
@@ -86,6 +98,10 @@ public:
     // object.
     bool add(CapabilitySpec spec);
 
+    // Returns false (and changes nothing) unless profile_id and
+    // profile_version are both empty or both well-formed.
+    bool set_identity(Identity identity);
+
     // Health contract. Names are unique across health checks and self tests.
     // Health checks must be cheap and read-only; self tests may actuate.
     bool add_health_check(std::string name, HealthCheck check);
@@ -93,6 +109,7 @@ public:
     bool add_diagnostic(std::string name, DiagnosticProvider provider);
 
     std::string manifest() const;
+    std::string identity() const;
     std::string status() const;       // health checks only
     std::string self_test() const;    // health checks + self tests
     std::string diagnostics() const;  // read-only, never runs a self test
@@ -114,6 +131,7 @@ private:
     std::string id_;
     std::string type_;
     std::string name_;
+    Identity identity_;
     std::vector<CapabilitySpec> capabilities_;
     std::vector<NamedCheck> health_checks_;
     std::vector<NamedCheck> self_tests_;

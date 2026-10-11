@@ -332,7 +332,82 @@ static void test_health_states() {
     CHECK_EQ(v.find("issues")->items[1].find("message")->string, "gone \"away\"");
 }
 
+static void test_identity() {
+    Endpoint ep("robot_car_01", "mobile_robot", "Car");
+
+    // Defaults: only the required fields.
+    Response r = ep.handle("GET", "/identity", "");
+    CHECK(r.status == 200);
+    CHECK_EQ(r.body,
+        R"({"spec_version":"0.1","device_id":"robot_car_01","type":"mobile_robot","name":"Car"})");
+
+    Identity id;
+    id.manufacturer = "Acme";
+    id.model = "RC-1";
+    id.hardware_revision = "B";
+    id.firmware_version = "0.1.0";
+    id.serial = "AABBCCDDEEFF";
+    id.profile_id = "esp32-s3-robot-car";
+    id.profile_version = "0.1.0";
+    CHECK(ep.set_identity(id));
+
+    r = ep.handle("GET", "/identity", "");
+    json::Value v;
+    std::string err;
+    CHECK(json::parse(r.body, v, err));
+    CHECK_EQ(v.find("device_id")->string, "robot_car_01");
+    CHECK_EQ(v.find("manufacturer")->string, "Acme");
+    CHECK_EQ(v.find("serial")->string, "AABBCCDDEEFF");
+    CHECK_EQ(v.find("profile")->find("id")->string, "esp32-s3-robot-car");
+    CHECK_EQ(v.find("profile")->find("version")->string, "0.1.0");
+
+    // Identity agrees with the manifest's device block.
+    CHECK(json::parse(ep.manifest(), v, err));
+    CHECK_EQ(v.find("device")->find("id")->string, "robot_car_01");
+    CHECK(v.find("device")->find("serial") == nullptr);  // identity stays out of the manifest
+
+    // Empty fields are omitted, not emitted as "".
+    Identity partial;
+    partial.model = "RC-1";
+    CHECK(ep.set_identity(partial));
+    CHECK(json::parse(ep.identity(), v, err));
+    CHECK(v.find("manufacturer") == nullptr);
+    CHECK(v.find("profile") == nullptr);
+    CHECK_EQ(v.find("model")->string, "RC-1");
+
+    // Strings are escaped.
+    Identity quoted;
+    quoted.model = "7\" \\ board";
+    CHECK(ep.set_identity(quoted));
+    CHECK(json::parse(ep.identity(), v, err));
+    CHECK_EQ(v.find("model")->string, "7\" \\ board");
+
+    // Rejected profile references leave the previous identity in place.
+    const char* bad[][2] = {
+        {"p", ""}, {"", "0.1.0"},                  // only one half
+        {"Bad Id", "0.1.0"}, {"-p", "0.1.0"}, {"p/q", "0.1.0"},
+        {"p", "1"}, {"p", "1.2"}, {"p", "1.2.3.4"}, {"p", "1..3"}, {"p", "a.b.c"}, {"p", "1.2."},
+    };
+    for (auto& pair : bad) {
+        Identity b;
+        b.profile_id = pair[0];
+        b.profile_version = pair[1];
+        CHECK(!ep.set_identity(b));
+    }
+    CHECK(json::parse(ep.identity(), v, err));
+    CHECK_EQ(v.find("model")->string, "7\" \\ board");
+
+    CHECK(ep.handle("POST", "/identity", "").status == 404);
+
+    // Valid edge cases.
+    Identity ok;
+    ok.profile_id = "a.b_c-1";
+    ok.profile_version = "10.20.30";
+    CHECK(ep.set_identity(ok));
+}
+
 int main() {
+    test_identity();
     test_health_registration();
     test_health_routes();
     test_health_states();

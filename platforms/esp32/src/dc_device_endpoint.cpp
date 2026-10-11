@@ -15,6 +15,34 @@ std::string error_body(const std::string& code, const std::string& message) {
            ",\"message\":" + json::quote(message) + "}";
 }
 
+// Profile ids: ^[a-z0-9][a-z0-9._-]*$
+bool valid_profile_id(const std::string& id) {
+    if (id.empty()) return false;
+    for (size_t i = 0; i < id.size(); ++i) {
+        char c = id[i];
+        bool alnum = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        if (!alnum && (i == 0 || (c != '.' && c != '_' && c != '-'))) return false;
+    }
+    return true;
+}
+
+// Profile versions: ^[0-9]+\.[0-9]+\.[0-9]+$
+bool valid_profile_version(const std::string& version) {
+    int parts = 0;
+    size_t digits = 0;
+    for (char c : version) {
+        if (c >= '0' && c <= '9') {
+            ++digits;
+        } else if (c == '.' && digits > 0 && parts < 2) {
+            ++parts;
+            digits = 0;
+        } else {
+            return false;
+        }
+    }
+    return parts == 2 && digits > 0;
+}
+
 Response error_response(int status, const std::string& code, const std::string& message) {
     return {status, error_body(code, message)};
 }
@@ -39,6 +67,41 @@ bool Endpoint::add(CapabilitySpec spec) {
     }
     capabilities_.push_back(std::move(spec));
     return true;
+}
+
+bool Endpoint::set_identity(Identity identity) {
+    bool has_id = !identity.profile_id.empty();
+    bool has_version = !identity.profile_version.empty();
+    if (has_id != has_version) {
+        return false;
+    }
+    if (has_id && (!valid_profile_id(identity.profile_id) ||
+                   !valid_profile_version(identity.profile_version))) {
+        return false;
+    }
+    identity_ = std::move(identity);
+    return true;
+}
+
+std::string Endpoint::identity() const {
+    std::string out = "{\"spec_version\":\"0.1\",\"device_id\":" + json::quote(id_) +
+                      ",\"type\":" + json::quote(type_) + ",\"name\":" + json::quote(name_);
+    auto optional = [&out](const char* key, const std::string& value) {
+        if (!value.empty()) {
+            out += std::string(",\"") + key + "\":" + json::quote(value);
+        }
+    };
+    optional("manufacturer", identity_.manufacturer);
+    optional("model", identity_.model);
+    optional("hardware_revision", identity_.hardware_revision);
+    optional("firmware_version", identity_.firmware_version);
+    optional("serial", identity_.serial);
+    if (!identity_.profile_id.empty()) {
+        out += ",\"profile\":{\"id\":" + json::quote(identity_.profile_id) +
+               ",\"version\":" + json::quote(identity_.profile_version) + "}";
+    }
+    out += "}";
+    return out;
 }
 
 bool Endpoint::name_taken(const std::string& name) const {
@@ -202,6 +265,9 @@ Response Endpoint::handle(const std::string& method,
     }
     if (method == "GET" && path == "/manifest") {
         return {200, manifest()};
+    }
+    if (method == "GET" && path == "/identity") {
+        return {200, identity()};
     }
     if (method == "GET" && path == "/status") {
         return {200, status()};
