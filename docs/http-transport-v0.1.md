@@ -12,6 +12,11 @@ Returns liveness and device identity.
 
 Returns the Device Capability Manifest.
 
+### GET /identity
+
+Cheap device identification and the device-class profile reference. See
+`identity-and-profile-v0.1.md`.
+
 ### GET /status, GET /diagnostics, POST /self_test
 
 Health reporting. See `health-contract-v0.1.md`. `/health` remains a pure

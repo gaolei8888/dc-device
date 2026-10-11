@@ -23,6 +23,10 @@ device = Device(
     device_id="linux_ref_01",
     device_type="linux_reference",
     name="dc-device Linux Reference Device",
+    manufacturer="dc-device",
+    model="linux-reference",
+    firmware_version="linux-reference-0.1.0",
+    profile={"id": "linux-reference", "version": "0.1.0"},
 )
 
 device.register(Capability(

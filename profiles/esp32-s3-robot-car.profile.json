@@ -1,0 +1,19 @@
+{
+  "spec_version": "0.1",
+  "profile": {
+    "id": "esp32-s3-robot-car",
+    "version": "0.1.0",
+    "name": "ESP32-S3 Robot Car",
+    "description": "ESP32-S3 robot car with a status LED and a camera pan servo.",
+    "device_type": "mobile_robot"
+  },
+  "required_capabilities": [
+    { "name": "led.set", "kind": "action" },
+    { "name": "servo.pan", "kind": "action" }
+  ],
+  "optional_capabilities": [
+    { "name": "camera.capture", "kind": "sensor" },
+    { "name": "motor.move", "kind": "action" }
+  ],
+  "required_health_checks": ["led", "servo"]
+}

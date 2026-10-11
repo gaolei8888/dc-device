@@ -21,7 +21,7 @@ Goal: one real device, one edge runtime, one AI-driven physical action.
 - [x] define health contract (`/status`, `/diagnostics`, `POST /self_test`)
 - [x] health contract in Python SDK
 - [x] health contract on ESP32
-- [ ] device identity / profile
+- [x] device identity / profile (`GET /identity`, `profiles/`)
 - [ ] device discovery primitives
 - [ ] implement GPIO / PWM / servo backend with ESP-IDF
 - [ ] implement camera capability

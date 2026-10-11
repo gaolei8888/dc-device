@@ -159,7 +159,8 @@ The long-term target is zero-touch device onboarding: users should not need to u
 
 ```text
 dc-device/
-├── schemas/          # capability, device, health and diagnostics schemas
+├── schemas/          # capability, identity, profile, health and diagnostics schemas
+├── profiles/         # device-class profiles
 ├── sdk/
 │   ├── python/       # Python SDK
 │   └── cpp/          # C++ SDK

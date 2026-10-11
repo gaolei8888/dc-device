@@ -27,6 +27,9 @@ class DeviceHttpClient:
     def health(self) -> Any:
         return self._get("/health")
 
+    def identity(self) -> Any:
+        return self._get("/identity")
+
     def status(self) -> Any:
         return self._get("/status")
 

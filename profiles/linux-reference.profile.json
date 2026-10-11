@@ -1,0 +1,16 @@
+{
+  "spec_version": "0.1",
+  "profile": {
+    "id": "linux-reference",
+    "version": "0.1.0",
+    "name": "dc-device Linux Reference Device",
+    "description": "Simulated Linux device used by the Python SDK examples.",
+    "device_type": "linux_reference"
+  },
+  "required_capabilities": [
+    { "name": "sensor.temperature", "kind": "sensor" },
+    { "name": "led.set", "kind": "action" },
+    { "name": "servo.move", "kind": "action" }
+  ],
+  "required_health_checks": ["connection"]
+}

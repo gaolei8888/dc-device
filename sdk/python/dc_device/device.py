@@ -107,12 +107,26 @@ class Device:
     name: str
     metadata: Dict[str, Any] = field(default_factory=dict)
     capabilities: Dict[str, Capability] = field(default_factory=dict)
+    # Identity (docs/identity-and-profile-v0.1.md). All optional.
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    hardware_revision: Optional[str] = None
+    firmware_version: Optional[str] = None
+    serial: Optional[str] = None
+    profile: Optional[Dict[str, str]] = None  # {"id": ..., "version": ...}
     health_checks: Dict[str, HealthCheck] = field(default_factory=dict)
     self_tests: Dict[str, HealthCheck] = field(default_factory=dict)
     diagnostic_info: Dict[str, Callable[[], Any]] = field(default_factory=dict)
     _started: float = field(default_factory=time.monotonic, repr=False)
     _last_self_test: Optional[Dict[str, Any]] = field(default=None, repr=False)
     _self_test_lock: Any = field(default_factory=threading.Lock, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.profile is not None:
+            if set(self.profile) != {"id", "version"} or not all(
+                isinstance(v, str) and v for v in self.profile.values()
+            ):
+                raise ValueError('profile must be {"id": str, "version": str}')
 
     def register(self, capability: Capability) -> None:
         if capability.name in self.capabilities:
@@ -148,6 +162,21 @@ class Device:
                 for cap in self.capabilities.values()
             ],
         }
+
+    def identity(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "spec_version": "0.1",
+            "device_id": self.device_id,
+            "type": self.device_type,
+            "name": self.name,
+        }
+        for key in ("manufacturer", "model", "hardware_revision", "firmware_version", "serial"):
+            value = getattr(self, key)
+            if value:
+                out[key] = value
+        if self.profile:
+            out["profile"] = dict(self.profile)
+        return out
 
     # --- health contract (docs/health-contract-v0.1.md) ---------------------
 

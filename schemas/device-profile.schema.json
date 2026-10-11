@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dc-device.dev/schema/device-profile-v0.1.json",
+  "title": "dc-device Device-Class Profile",
+  "description": "Declares what every device of one class must provide, so dc-edge can match adapters and check that a device is complete. Pin mappings are NOT part of a profile.",
+  "type": "object",
+  "required": ["spec_version", "profile", "required_capabilities"],
+  "properties": {
+    "spec_version": {
+      "type": "string",
+      "const": "0.1"
+    },
+    "profile": {
+      "type": "object",
+      "required": ["id", "version", "name", "device_type"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "device_type": {
+          "description": "Must equal device.type in the manifest of a conforming device.",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "required_capabilities": { "$ref": "#/$defs/capabilityList" },
+    "optional_capabilities": { "$ref": "#/$defs/capabilityList" },
+    "required_health_checks": {
+      "description": "Check names that must appear in /status.checks.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "capabilityList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+          "kind": { "enum": ["sensor", "action", "stream"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -37,6 +37,10 @@ class DeviceRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, self.device.manifest())
             return
 
+        if path == "/identity":
+            self._send_json(200, self.device.identity())
+            return
+
         if path == "/status":
             self._send_json(200, self.device.get_status())
             return
