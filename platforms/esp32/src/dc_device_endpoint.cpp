@@ -134,7 +134,27 @@ bool Endpoint::add(CapabilitySpec spec) {
             return false;
         }
     }
+    // docs/safety-semantics-v0.1.md: max_rate_hz is a minimum interval between
+    // accepted invocations; emergency capabilities are exempt.
+    json::Value safety;
+    std::string safety_error;
+    json::parse(spec.safety_json, safety, safety_error);
+    RateState rate;
+    bool emergency = false;
+    if (const json::Value* flag = safety.find("emergency")) {
+        if (!flag->is_bool()) return false;
+        emergency = flag->boolean;
+    }
+    if (const json::Value* confirm = safety.find("requires_confirmation")) {
+        // An emergency capability that needs confirmation is not an emergency stop.
+        if (!confirm->is_bool() || (emergency && confirm->boolean)) return false;
+    }
+    if (const json::Value* hz = safety.find("max_rate_hz")) {
+        if (!hz->is_number() || !(hz->number > 0)) return false;
+        if (!emergency) rate.min_interval_s = 1.0 / hz->number;
+    }
     capabilities_.push_back(std::move(spec));
+    rates_.push_back(rate);
     return true;
 }
 
@@ -380,13 +400,28 @@ Response Endpoint::invoke(const std::string& body) const {
         return error_response(400, "InvalidRequest", "Field arguments must be an object");
     }
 
-    for (const auto& cap : capabilities_) {
+    for (size_t index = 0; index < capabilities_.size(); ++index) {
+        const auto& cap = capabilities_[index];
         if (cap.name != capability->string) {
             continue;
         }
         std::string invalid = validate_arguments(cap.parameters_json, *arguments);
         if (!invalid.empty()) {
             return error_response(400, "InvalidArguments", invalid);
+        }
+        RateState& rate = rates_[index];
+        if (rate.min_interval_s > 0) {
+            double now = clock_ ? clock_()
+                                : std::chrono::duration<double>(
+                                      std::chrono::steady_clock::now() - started_).count();
+            if (rate.has_last && now - rate.last_s < rate.min_interval_s) {
+                long wait_ms = static_cast<long>((rate.min_interval_s - (now - rate.last_s)) * 1000) + 1;
+                return error_response(429, "RateLimited",
+                                      cap.name + " is rate limited; retry in " +
+                                          std::to_string(wait_ms) + " ms");
+            }
+            rate.has_last = true;
+            rate.last_s = now;
         }
         InvokeResult result = cap.handler(*arguments);
         switch (result.status) {

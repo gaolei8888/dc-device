@@ -11,6 +11,9 @@ CheckState = Literal["ok", "warning", "failed", "skipped"]
 class ValidationError(ValueError):
     pass
 
+class RateLimited(RuntimeError):
+    """The capability was invoked faster than its safety.max_rate_hz allows."""
+
 def _matches_type(value: Any, schema_type: str) -> bool:
     if schema_type == "number":
         return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -90,6 +93,21 @@ def _run_check(name: str, check: HealthCheck) -> CheckResult:
         )
     return outcome
 
+def _check_safety(capability: "Capability") -> None:
+    safety = capability.safety
+    rate = safety.get("max_rate_hz")
+    if "max_rate_hz" in safety and (
+        isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate <= 0
+    ):
+        raise ValueError(f"{capability.name}: safety.max_rate_hz must be a number > 0")
+    for flag in ("emergency", "requires_confirmation"):
+        if flag in safety and not isinstance(safety[flag], bool):
+            raise ValueError(f"{capability.name}: safety.{flag} must be a boolean")
+    if safety.get("emergency") and safety.get("requires_confirmation"):
+        raise ValueError(
+            f"{capability.name}: an emergency capability cannot require confirmation"
+        )
+
 @dataclass
 class Capability:
     name: str
@@ -118,6 +136,8 @@ class Device:
     self_tests: Dict[str, HealthCheck] = field(default_factory=dict)
     diagnostic_info: Dict[str, Callable[[], Any]] = field(default_factory=dict)
     _started: float = field(default_factory=time.monotonic, repr=False)
+    _last_invoked: Dict[str, float] = field(default_factory=dict, repr=False)
+    _rate_lock: Any = field(default_factory=threading.Lock, repr=False)
     _last_self_test: Optional[Dict[str, Any]] = field(default=None, repr=False)
     _self_test_lock: Any = field(default_factory=threading.Lock, repr=False)
 
@@ -131,6 +151,7 @@ class Device:
     def register(self, capability: Capability) -> None:
         if capability.name in self.capabilities:
             raise ValueError(f"Capability already registered: {capability.name}")
+        _check_safety(capability)
         self.capabilities[capability.name] = capability
 
     def invoke(self, capability_name: str, **kwargs: Any) -> Any:
@@ -139,7 +160,26 @@ class Device:
             raise KeyError(f"Unknown capability: {capability_name}")
 
         validate_arguments(capability.parameters, kwargs)
+        self._check_rate(capability)
         return capability.handler(**kwargs)
+
+    def _check_rate(self, capability: Capability) -> None:
+        # docs/safety-semantics-v0.1.md: max_rate_hz is a minimum interval
+        # between accepted invocations; emergency capabilities are exempt.
+        rate = capability.safety.get("max_rate_hz")
+        if capability.safety.get("emergency") is True or not isinstance(rate, (int, float)) \
+                or isinstance(rate, bool) or rate <= 0:
+            return
+        interval = 1.0 / rate
+        with self._rate_lock:
+            now = time.monotonic()
+            last = self._last_invoked.get(capability.name)
+            if last is not None and now - last < interval:
+                wait_ms = int((interval - (now - last)) * 1000) + 1
+                raise RateLimited(
+                    f"{capability.name} is limited to {rate:g} Hz; retry in {wait_ms} ms"
+                )
+            self._last_invoked[capability.name] = now
 
     def manifest(self) -> Dict[str, Any]:
         return {

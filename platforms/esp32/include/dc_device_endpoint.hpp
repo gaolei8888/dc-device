@@ -94,8 +94,8 @@ public:
         : id_(std::move(id)), type_(std::move(type)), name_(std::move(name)) {}
 
     // Returns false (and registers nothing) for an empty/duplicate name, an
-    // unknown kind, a missing handler, or a schema field that is not a JSON
-    // object.
+    // unknown kind, a missing handler, a schema field that is not a JSON
+    // object, or a safety.max_rate_hz / safety.emergency of the wrong type.
     bool add(CapabilitySpec spec);
 
     // Returns false (and changes nothing) unless profile_id and
@@ -107,6 +107,10 @@ public:
     bool add_health_check(std::string name, HealthCheck check);
     bool add_self_test(std::string name, HealthCheck check);
     bool add_diagnostic(std::string name, DiagnosticProvider provider);
+
+    // Replaces the monotonic clock (seconds) used for safety.max_rate_hz.
+    // For tests; the default is std::chrono::steady_clock.
+    void set_clock(std::function<double()> clock) { clock_ = std::move(clock); }
 
     std::string manifest() const;
     std::string identity() const;
@@ -132,7 +136,15 @@ private:
     std::string type_;
     std::string name_;
     Identity identity_;
+    struct RateState {
+        double min_interval_s = 0;  // 0 = unlimited (also for emergency)
+        bool has_last = false;
+        double last_s = 0;
+    };
+
     std::vector<CapabilitySpec> capabilities_;
+    mutable std::vector<RateState> rates_;  // parallel to capabilities_
+    std::function<double()> clock_;
     std::vector<NamedCheck> health_checks_;
     std::vector<NamedCheck> self_tests_;
     std::vector<std::pair<std::string, DiagnosticProvider>> diagnostics_;

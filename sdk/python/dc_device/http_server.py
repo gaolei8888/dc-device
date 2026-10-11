@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
-from .device import Device
+from .device import Device, RateLimited
 
 
 class DeviceRequestHandler(BaseHTTPRequestHandler):
@@ -81,6 +81,10 @@ class DeviceRequestHandler(BaseHTTPRequestHandler):
             )
         except KeyError as exc:
             self._send_json(404, {"ok": False, "error": str(exc)})
+        except RateLimited as exc:
+            self._send_json(
+                429, {"ok": False, "error": "RateLimited", "message": str(exc)}
+            )
         except Exception as exc:
             self._send_json(
                 400,

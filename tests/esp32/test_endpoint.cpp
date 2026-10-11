@@ -265,6 +265,42 @@ static Endpoint make_health_endpoint(int* sweeps) {
     return ep;
 }
 
+static void test_rate_limit() {
+    Endpoint ep("d", "t", "n");
+    double now = 100.0;
+    ep.set_clock([&now] { return now; });
+    int calls = 0;
+    auto make = [&](const char* name, const char* safety) {
+        CapabilitySpec spec;
+        spec.name = name;
+        spec.kind = "action";
+        spec.safety_json = safety;
+        spec.handler = [&calls](const json::Value&) { ++calls; return InvokeResult::success(); };
+        return spec;
+    };
+    CHECK(ep.add(make("act", R"({"max_rate_hz":2})")));
+    CHECK(ep.add(make("stop", R"({"max_rate_hz":1,"emergency":true})")));
+    CHECK(!ep.add(make("bad0", R"({"max_rate_hz":0})")));
+    CHECK(!ep.add(make("bad1", R"({"max_rate_hz":"fast"})")));
+    CHECK(!ep.add(make("bad2", R"({"emergency":1})")));
+    CHECK(!ep.add(make("bad3", R"({"emergency":true,"requires_confirmation":true})")));
+    CHECK(ep.add(make("ok3", R"({"requires_confirmation":true})")));
+
+    const char* act = R"({"capability":"act"})";
+    CHECK(ep.handle("POST", "/invoke", act).status == 200);
+    now += 0.1;
+    Response r = ep.handle("POST", "/invoke", act);
+    CHECK(r.status == 429);
+    CHECK(r.body.find("\"RateLimited\"") != std::string::npos);
+    CHECK(calls == 1);
+    now += 0.5;  // 0.6 s since the accepted call, limit is 0.5 s
+    CHECK(ep.handle("POST", "/invoke", act).status == 200);
+
+    for (int i = 0; i < 4; ++i) {
+        CHECK(ep.handle("POST", "/invoke", R"({"capability":"stop"})").status == 200);
+    }
+}
+
 static void test_health_registration() {
     Endpoint ep("id", "t", "n");
     auto ok = [] { return CheckResult::ok(); };
@@ -436,6 +472,7 @@ int main() {
     test_registration();
     test_routes();
     test_invoke();
+    test_rate_limit();
     if (g_failures == 0) {
         std::printf("all tests passed\n");
         return 0;
