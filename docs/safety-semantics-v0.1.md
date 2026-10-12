@@ -13,6 +13,7 @@ no way to check it. A device that can only declare a rule says so.
 | Field | Who enforces | Meaning |
 |---|---|---|
 | `max_rate_hz` | Device | Minimum interval between accepted invocations of this capability is `1 / max_rate_hz` seconds. |
+| `max_duration_ms` | Device | After a successful call, the effect lasts at most this long unless the capability is invoked again. Then the device runs its safe state. See `safety-kernel-v0.1.md`. |
 | `emergency` | Device (registration) and caller | The capability stops or makes the device safe. It is never rate limited, and it cannot require confirmation. |
 | `requires_confirmation` | Caller | The caller must have an explicit, current confirmation from the user for this invocation before sending it. The device does not verify it (no proof is carried on `/invoke`; see gaps 12 and 13). |
 | `local_allowed` | Caller | See below. Declared only. |
