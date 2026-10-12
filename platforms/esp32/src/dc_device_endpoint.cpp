@@ -145,6 +145,10 @@ bool Endpoint::add(CapabilitySpec spec) {
         if (!flag->is_bool()) return false;
         emergency = flag->boolean;
     }
+    if (const json::Value* motion = safety.find("motion")) {
+        if (!motion->is_bool()) return false;
+        rate.motion = motion->boolean;
+    }
     if (const json::Value* confirm = safety.find("requires_confirmation")) {
         // An emergency capability that needs confirmation is not an emergency stop.
         if (!confirm->is_bool() || (emergency && confirm->boolean)) return false;
@@ -193,7 +197,7 @@ bool Endpoint::set_safe_state(const std::string& capability, bool safe_on_boot) 
 bool Endpoint::validate_safety() const {
     if (!safe_state_.empty()) return true;
     for (const auto& r : rates_) {
-        if (r.max_duration_s > 0) return false;
+        if (r.max_duration_s > 0 || r.motion) return false;
     }
     return true;
 }

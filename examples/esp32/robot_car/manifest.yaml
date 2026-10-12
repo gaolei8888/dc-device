@@ -23,6 +23,14 @@ capabilities:
           minimum: -90
           maximum: 90
       required: [angle]
+    safety:
+      motion: true
+
+  - name: servo.stop
+    description: Stop the pan servo and make the device safe.
+    kind: action
+    safety:
+      emergency: true
 
   - name: led.set
     description: Set the status LED.

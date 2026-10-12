@@ -63,12 +63,24 @@ def conformance(
         else {"expected": expected_type, "actual": actual_type}
     )
 
+    # A device that can move must declare a safe state, and it must be an
+    # emergency capability in the manifest (docs/safety-kernel-v0.1.md).
+    moving = [c["name"] for c in capabilities.values() if c.get("safety", {}).get("motion") is True]
+    safe_state = manifest.get("safety_kernel", {}).get("safe_state")
+    safe_cap = capabilities.get(safe_state) if safe_state else None
+    missing_safe_state = bool(moving) and not (
+        safe_cap is not None and safe_cap.get("safety", {}).get("emergency") is True
+    )
+
     return {
         "profile": {
             "id": profile["profile"]["id"],
             "version": profile["profile"]["version"],
         },
-        "conforms": not (missing or kind_mismatches or missing_checks or type_mismatch),
+        "conforms": not (
+            missing or kind_mismatches or missing_checks or type_mismatch or missing_safe_state
+        ),
+        "missing_safe_state": missing_safe_state,
         "type_mismatch": type_mismatch,
         "missing_capabilities": missing,
         "kind_mismatches": kind_mismatches,

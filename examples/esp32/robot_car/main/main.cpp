@@ -80,8 +80,22 @@ static void register_capabilities() {
     servo.kind = "action";
     servo.parameters_json =
         R"({"type":"object","properties":{"angle":{"type":"number","minimum":-90,"maximum":90}},"required":["angle"]})";
+    servo.safety_json = R"({"motion":true})";
     servo.handler = servo_pan;
     endpoint.add(servo);
+
+    // Safe state: stop driving the servo. The pin is not driven at boot either.
+    dc_device::esp32::CapabilitySpec stop;
+    stop.name = "servo.stop";
+    stop.description = "Stop the pan servo and make the device safe.";
+    stop.kind = "action";
+    stop.safety_json = R"({"emergency":true})";
+    stop.handler = [](const json::Value&) {
+        if (!pan_servo.release()) return InvokeResult::failed("Could not release the pan servo");
+        return InvokeResult::success("{\"stopped\":true}");
+    };
+    endpoint.add(stop);
+    endpoint.set_safe_state("servo.stop", true);
 }
 
 static void pause_ms(int ms) {
@@ -176,6 +190,10 @@ extern "C" void app_main() {
     register_capabilities();
     register_health();
     register_identity();
+    if (!endpoint.validate_safety()) {
+        ESP_LOGE(TAG, "A moving capability has no safe state; refusing to serve");
+        return;
+    }
 
     dc_device::esp32::WifiConfig wifi;
     wifi.ssid = CONFIG_DC_DEVICE_WIFI_SSID;
@@ -203,6 +221,7 @@ int main() {
     register_capabilities();
     register_health();
     register_identity();
+    if (!endpoint.validate_safety()) return 1;
     auto response = endpoint.handle(
         "POST", "/invoke", R"({"capability":"servo.pan","arguments":{"angle":30}})");
     auto self_test = endpoint.handle("POST", "/self_test", "");

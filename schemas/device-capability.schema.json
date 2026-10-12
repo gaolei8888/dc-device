@@ -103,6 +103,10 @@
                 "type": "boolean",
                 "default": false
               },
+              "motion": {
+                "type": "boolean",
+                "default": false
+              },
               "max_rate_hz": {
                 "type": "number",
                 "exclusiveMinimum": 0

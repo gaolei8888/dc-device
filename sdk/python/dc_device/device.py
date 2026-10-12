@@ -107,7 +107,7 @@ def _check_safety(capability: "Capability") -> None:
         raise ValueError(f"{capability.name}: safety.max_duration_ms must be an integer > 0")
     if duration is not None and safety.get("emergency"):
         raise ValueError(f"{capability.name}: an emergency capability cannot be time limited")
-    for flag in ("emergency", "requires_confirmation"):
+    for flag in ("emergency", "requires_confirmation", "motion"):
         if flag in safety and not isinstance(safety[flag], bool):
             raise ValueError(f"{capability.name}: safety.{flag} must be a boolean")
     if safety.get("emergency") and safety.get("requires_confirmation"):
@@ -196,13 +196,18 @@ class Device:
         self.safe_on_boot = bool(safe_on_boot)
 
     def validate_safety(self) -> None:
-        """Raise ValueError if a time-limited capability has no safe state to fall back to."""
+        """Raise ValueError if a time-limited or moving capability has no safe
+        state to fall back to (docs/safety-kernel-v0.1.md)."""
         if self.safe_state is not None:
             return
         for cap in self.capabilities.values():
             if "max_duration_ms" in cap.safety:
                 raise ValueError(
                     f"{cap.name} declares max_duration_ms but no safe state is set"
+                )
+            if cap.safety.get("motion") is True:
+                raise ValueError(
+                    f"{cap.name} declares motion but no safe state is set"
                 )
 
     def tick(self) -> bool:

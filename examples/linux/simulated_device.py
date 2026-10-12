@@ -55,8 +55,21 @@ device.register(Capability(
         "properties":{"angle":{"type":"number","minimum":0,"maximum":180}},
         "required":["angle"],
     },
-    safety={"max_rate_hz":5},
+    safety={"max_rate_hz":5, "motion":True},
 ))
+
+def stop_motion() -> dict:
+    # A real device would cut power to the actuator here.
+    return {"stopped": True}
+
+device.register(Capability(
+    name="servo.stop",
+    description="Stop the servo and make the device safe.",
+    kind="action",
+    handler=stop_motion,
+    safety={"emergency":True},
+))
+device.set_safe_state("servo.stop", safe_on_boot=True)
 
 device.add_health_check("connection", lambda: "ok")
 

@@ -209,3 +209,46 @@ def test_http_identity_route_and_client():
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- moving devices need a safe state -----------------------------------------
+
+def _moving_device(with_stop):
+    d = Device("d", "t", "D")
+    d.register(Capability("led.set", "x", "action", lambda: 1))
+    d.register(Capability("temp.read", "x", "sensor", lambda: 1))
+    d.register(Capability("arm.move", "x", "action", lambda: 1, safety={"motion": True}))
+    d.add_health_check("led", lambda: "ok")
+    if with_stop:
+        d.register(Capability("arm.stop", "x", "action", lambda: 1, safety={"emergency": True}))
+        d.set_safe_state("arm.stop")
+    return d
+
+
+def test_moving_device_without_safe_state_does_not_conform_or_validate():
+    d = _moving_device(with_stop=False)
+    result = conformance(PROFILE, d.manifest(), d.get_status())
+    assert result["conforms"] is False
+    assert result["missing_safe_state"] is True
+    with pytest.raises(ValueError):
+        d.validate_safety()
+
+
+def test_moving_device_with_safe_state_conforms():
+    d = _moving_device(with_stop=True)
+    result = conformance(PROFILE, d.manifest(), d.get_status())
+    assert result["missing_safe_state"] is False
+    assert result["conforms"] is True
+    d.validate_safety()
+
+
+def test_safe_state_must_be_an_emergency_capability_in_the_manifest():
+    d = _moving_device(with_stop=False)
+    manifest = d.manifest()
+    manifest["safety_kernel"] = {"safe_state": "led.set"}  # not an emergency capability
+    assert conformance(PROFILE, manifest, d.get_status())["missing_safe_state"] is True
+
+
+def test_non_moving_device_needs_no_safe_state():
+    result = conformance(PROFILE, *make())
+    assert result["missing_safe_state"] is False

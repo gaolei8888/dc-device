@@ -94,4 +94,8 @@ bool Servo::write_angle(float angle_deg) {
     return pwm_.write_duty(duty);
 }
 
+bool Servo::release() {
+    return pwm_.write_duty(0.0f);
+}
+
 }  // namespace dc_device::esp32

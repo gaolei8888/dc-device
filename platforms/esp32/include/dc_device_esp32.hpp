@@ -31,6 +31,8 @@ public:
     Servo(int pin, int channel) : pwm_(pin, channel) {}
     bool begin();
     bool write_angle(float angle_deg);
+    // Stops the pulse train. A hobby servo goes limp and holds no position.
+    bool release();
 
 private:
     PwmOutput pwm_;

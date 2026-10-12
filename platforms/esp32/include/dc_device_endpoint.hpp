@@ -113,7 +113,7 @@ public:
     // false if it is unknown, not an emergency capability, or requires arguments.
     bool set_safe_state(const std::string& capability, bool safe_on_boot = false);
 
-    // False if a capability declares max_duration_ms but no safe state is set.
+    // False if a capability declares max_duration_ms or motion but no safe state is set.
     // Call once after registration and do not serve if it fails.
     bool validate_safety() const;
 
@@ -155,6 +155,7 @@ private:
         bool has_last = false;
         double last_s = 0;
         double max_duration_s = 0;  // 0 = not time limited
+        bool motion = false;        // safety.motion
         bool armed = false;
         double deadline_s = 0;
     };

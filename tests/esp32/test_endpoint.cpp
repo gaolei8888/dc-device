@@ -321,6 +321,17 @@ static void test_safety_kernel() {
     CHECK(!ep.add(make("bad2", R"({"max_duration_ms":5,"emergency":true})")));
     CHECK(!ep.validate_safety());  // time limited, no safe state yet
     CHECK(ep.add(make("stop", R"({"emergency":true})")));
+
+    // A moving capability also needs a safe state.
+    Endpoint mover("d", "t", "n");
+    CHECK(mover.validate_safety());
+    CHECK(!mover.add(make("m0", R"({"motion":"yes"})")));
+    CHECK(mover.add(make("arm", R"({"motion":true})")));
+    CHECK(!mover.validate_safety());
+    CHECK(mover.add(make("arm.stop", R"({"emergency":true})")));
+    CHECK(mover.set_safe_state("arm.stop"));
+    CHECK(mover.validate_safety());
+
     CHECK(!ep.set_safe_state("move"));     // not an emergency capability
     CHECK(!ep.set_safe_state("missing"));
     CHECK(ep.set_safe_state("stop", true));
