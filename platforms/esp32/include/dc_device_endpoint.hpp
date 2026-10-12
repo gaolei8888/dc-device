@@ -108,6 +108,20 @@ public:
     bool add_self_test(std::string name, HealthCheck check);
     bool add_diagnostic(std::string name, DiagnosticProvider provider);
 
+    // Safety kernel (docs/safety-kernel-v0.1.md). Names the emergency capability
+    // that brings the device to its safe state. Register it first. Returns
+    // false if it is unknown, not an emergency capability, or requires arguments.
+    bool set_safe_state(const std::string& capability, bool safe_on_boot = false);
+
+    // False if a capability declares max_duration_ms but no safe state is set.
+    // Call once after registration and do not serve if it fails.
+    bool validate_safety() const;
+
+    // Runs the safe state if a time-limited capability outlived max_duration_ms.
+    // Call from a task every ~50 ms. Returns true if the safe state ran. Must be
+    // called from the same task as handle() or under the caller's own lock.
+    bool tick();
+
     // Replaces the monotonic clock (seconds) used for safety.max_rate_hz.
     // For tests; the default is std::chrono::steady_clock.
     void set_clock(std::function<double()> clock) { clock_ = std::move(clock); }
@@ -140,11 +154,17 @@ private:
         double min_interval_s = 0;  // 0 = unlimited (also for emergency)
         bool has_last = false;
         double last_s = 0;
+        double max_duration_s = 0;  // 0 = not time limited
+        bool armed = false;
+        double deadline_s = 0;
     };
+    double now_s() const;
 
     std::vector<CapabilitySpec> capabilities_;
     mutable std::vector<RateState> rates_;  // parallel to capabilities_
     std::function<double()> clock_;
+    std::string safe_state_;
+    bool safe_on_boot_ = false;
     std::vector<NamedCheck> health_checks_;
     std::vector<NamedCheck> self_tests_;
     std::vector<std::pair<std::string, DiagnosticProvider>> diagnostics_;

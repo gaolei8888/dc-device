@@ -301,6 +301,50 @@ static void test_rate_limit() {
     }
 }
 
+static void test_safety_kernel() {
+    Endpoint ep("d", "t", "n");
+    double now = 0;
+    ep.set_clock([&now] { return now; });
+    std::string log;
+    auto make = [&](const char* name, const char* safety) {
+        CapabilitySpec spec;
+        spec.name = name;
+        spec.kind = "action";
+        spec.safety_json = safety;
+        spec.parameters_json = R"({"type":"object","properties":{},"required":[]})";
+        spec.handler = [&log, name](const json::Value&) { log += name; log += ';'; return InvokeResult::success(); };
+        return spec;
+    };
+    CHECK(ep.add(make("move", R"({"max_duration_ms":500})")));
+    CHECK(!ep.add(make("bad0", R"({"max_duration_ms":0})")));
+    CHECK(!ep.add(make("bad1", R"({"max_duration_ms":1.5})")));
+    CHECK(!ep.add(make("bad2", R"({"max_duration_ms":5,"emergency":true})")));
+    CHECK(!ep.validate_safety());  // time limited, no safe state yet
+    CHECK(ep.add(make("stop", R"({"emergency":true})")));
+    CHECK(!ep.set_safe_state("move"));     // not an emergency capability
+    CHECK(!ep.set_safe_state("missing"));
+    CHECK(ep.set_safe_state("stop", true));
+    CHECK(ep.validate_safety());
+    CHECK(ep.manifest().find(R"("safety_kernel":{"safe_state":"stop","safe_on_boot":true})") != std::string::npos);
+
+    const char* move = R"({"capability":"move"})";
+    ep.handle("POST", "/invoke", move);
+    now = 0.4;
+    CHECK(!ep.tick());
+    ep.handle("POST", "/invoke", move);  // re-invoking extends the deadline
+    now = 0.8;
+    CHECK(!ep.tick());
+    now = 1.0;
+    CHECK(ep.tick());
+    CHECK_EQ(log, "move;move;stop;");
+    CHECK(!ep.tick());
+
+    ep.handle("POST", "/invoke", move);
+    ep.handle("POST", "/invoke", R"({"capability":"stop"})");
+    now = 9.0;
+    CHECK(!ep.tick());  // stopping by hand disarms
+}
+
 static void test_health_registration() {
     Endpoint ep("id", "t", "n");
     auto ok = [] { return CheckResult::ok(); };
@@ -473,6 +517,7 @@ int main() {
     test_routes();
     test_invoke();
     test_rate_limit();
+    test_safety_kernel();
     if (g_failures == 0) {
         std::printf("all tests passed\n");
         return 0;

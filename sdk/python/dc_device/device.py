@@ -100,6 +100,13 @@ def _check_safety(capability: "Capability") -> None:
         isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate <= 0
     ):
         raise ValueError(f"{capability.name}: safety.max_rate_hz must be a number > 0")
+    duration = safety.get("max_duration_ms")
+    if "max_duration_ms" in safety and (
+        isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0
+    ):
+        raise ValueError(f"{capability.name}: safety.max_duration_ms must be an integer > 0")
+    if duration is not None and safety.get("emergency"):
+        raise ValueError(f"{capability.name}: an emergency capability cannot be time limited")
     for flag in ("emergency", "requires_confirmation"):
         if flag in safety and not isinstance(safety[flag], bool):
             raise ValueError(f"{capability.name}: safety.{flag} must be a boolean")
@@ -138,6 +145,11 @@ class Device:
     _started: float = field(default_factory=time.monotonic, repr=False)
     _last_invoked: Dict[str, float] = field(default_factory=dict, repr=False)
     _rate_lock: Any = field(default_factory=threading.Lock, repr=False)
+    safe_state: Optional[str] = None
+    safe_on_boot: bool = False
+    clock: Callable[[], float] = field(default=time.monotonic, repr=False)
+    _deadlines: Dict[str, float] = field(default_factory=dict, repr=False)
+    _kernel_lock: Any = field(default_factory=threading.Lock, repr=False)
     _last_self_test: Optional[Dict[str, Any]] = field(default=None, repr=False)
     _self_test_lock: Any = field(default_factory=threading.Lock, repr=False)
 
@@ -161,7 +173,49 @@ class Device:
 
         validate_arguments(capability.parameters, kwargs)
         self._check_rate(capability)
-        return capability.handler(**kwargs)
+        result = capability.handler(**kwargs)
+        with self._kernel_lock:
+            if capability.name == self.safe_state:
+                self._deadlines.clear()
+            duration = capability.safety.get("max_duration_ms")
+            if duration is not None:
+                self._deadlines[capability.name] = self.clock() + duration / 1000.0
+        return result
+
+    def set_safe_state(self, capability_name: str, safe_on_boot: bool = False) -> None:
+        """Name the emergency capability that brings the device to its safe state.
+
+        See docs/safety-kernel-v0.1.md. Register the capability first.
+        """
+        capability = self.capabilities.get(capability_name)
+        if capability is None or capability.safety.get("emergency") is not True:
+            raise ValueError(f"{capability_name} must be a registered emergency capability")
+        if capability.parameters.get("required"):
+            raise ValueError(f"{capability_name} must not require arguments")
+        self.safe_state = capability_name
+        self.safe_on_boot = bool(safe_on_boot)
+
+    def validate_safety(self) -> None:
+        """Raise ValueError if a time-limited capability has no safe state to fall back to."""
+        if self.safe_state is not None:
+            return
+        for cap in self.capabilities.values():
+            if "max_duration_ms" in cap.safety:
+                raise ValueError(
+                    f"{cap.name} declares max_duration_ms but no safe state is set"
+                )
+
+    def tick(self) -> bool:
+        """Run the safe state if any time-limited capability has outlived its
+        max_duration_ms. Call often (the HTTP server does so every 50 ms).
+        Returns True if the safe state ran."""
+        with self._kernel_lock:
+            now = self.clock()
+            if self.safe_state is None or not any(d <= now for d in self._deadlines.values()):
+                return False
+            self._deadlines.clear()
+        self.capabilities[self.safe_state].handler()
+        return True
 
     def _check_rate(self, capability: Capability) -> None:
         # docs/safety-semantics-v0.1.md: max_rate_hz is a minimum interval
@@ -182,7 +236,7 @@ class Device:
             self._last_invoked[capability.name] = now
 
     def manifest(self) -> Dict[str, Any]:
-        return {
+        out: Dict[str, Any] = {
             "spec_version": "0.1",
             "device": {
                 "id": self.device_id,
@@ -202,6 +256,12 @@ class Device:
                 for cap in self.capabilities.values()
             ],
         }
+        if self.safe_state is not None:
+            out["safety_kernel"] = {
+                "safe_state": self.safe_state,
+                "safe_on_boot": self.safe_on_boot,
+            }
+        return out
 
     def identity(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {

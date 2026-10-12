@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
@@ -102,6 +103,20 @@ def make_server(device: Device, host: str = "0.0.0.0", port: int = 8787) -> Thre
 
 
 def serve(device: Device, host: str = "0.0.0.0", port: int = 8787) -> None:
+    device.validate_safety()
     server = make_server(device, host, port)
+    stop = threading.Event()
+
+    def watchdog() -> None:
+        while not stop.wait(0.05):
+            try:
+                device.tick()
+            except Exception as exc:  # keep watching even if the safe state fails once
+                print(f"dc-device safe state failed: {exc}")
+
+    threading.Thread(target=watchdog, daemon=True).start()
     print(f"dc-device serving {device.device_id} on http://{host}:{port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        stop.set()

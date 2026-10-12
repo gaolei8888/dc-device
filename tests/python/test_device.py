@@ -97,3 +97,69 @@ def test_register_rejects_inconsistent_safety():
                 {"emergency": True, "requires_confirmation": True}):
         with pytest.raises(ValueError):
             device.register(Capability("x", "d", "action", lambda: None, safety=bad))
+
+
+def _kernel_device():
+    from dc_device import Capability, Device
+
+    now = [0.0]
+    log = []
+    device = Device("d", "t", "n", clock=lambda: now[0])
+    device.register(Capability("move", "d", "action", lambda: log.append("move"),
+                               safety={"max_duration_ms": 500}))
+    device.register(Capability("stop", "d", "action", lambda: log.append("stop"),
+                               safety={"emergency": True}))
+    device.set_safe_state("stop", safe_on_boot=True)
+    return device, now, log
+
+
+def test_time_limited_capability_falls_back_to_safe_state():
+    device, now, log = _kernel_device()
+    device.invoke("move")
+    now[0] = 0.4
+    assert device.tick() is False
+    now[0] = 0.6
+    assert device.tick() is True
+    assert log == ["move", "stop"]
+    assert device.tick() is False  # one trip per arming
+
+
+def test_reinvoking_extends_the_deadline_and_stop_disarms():
+    device, now, log = _kernel_device()
+    device.invoke("move")
+    now[0] = 0.4
+    device.invoke("move")
+    now[0] = 0.8
+    assert device.tick() is False
+    now[0] = 1.0
+    assert device.tick() is True
+    device.invoke("move")
+    device.invoke("stop")
+    now[0] = 5.0
+    assert device.tick() is False
+
+
+def test_manifest_declares_safety_kernel_and_validates():
+    import json
+    import pathlib
+    import jsonschema
+    import pytest
+    from dc_device import Capability, Device
+
+    device, _, _ = _kernel_device()
+    manifest = device.manifest()
+    assert manifest["safety_kernel"] == {"safe_state": "stop", "safe_on_boot": True}
+    schema = json.loads((pathlib.Path(__file__).parents[2] / "schemas" / "device-capability.schema.json").read_text())
+    jsonschema.validate(manifest, schema)
+
+    bare = Device("d", "t", "n")
+    bare.register(Capability("move", "d", "action", lambda: None, safety={"max_duration_ms": 100}))
+    with pytest.raises(ValueError):
+        bare.validate_safety()
+    with pytest.raises(ValueError):
+        bare.set_safe_state("move")  # not an emergency capability
+    with pytest.raises(ValueError):
+        bare.register(Capability("bad", "d", "action", lambda: None, safety={"max_duration_ms": 0}))
+    with pytest.raises(ValueError):
+        bare.register(Capability("bad2", "d", "action", lambda: None,
+                                 safety={"max_duration_ms": 5, "emergency": True}))

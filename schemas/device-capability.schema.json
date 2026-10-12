@@ -13,6 +13,21 @@
       "type": "string",
       "const": "0.1"
     },
+    "safety_kernel": {
+      "type": "object",
+      "required": ["safe_state"],
+      "properties": {
+        "safe_state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "safe_on_boot": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": true
+    },
     "device": {
       "type": "object",
       "required": [
@@ -90,6 +105,10 @@
               },
               "max_rate_hz": {
                 "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "max_duration_ms": {
+                "type": "integer",
                 "exclusiveMinimum": 0
               }
             },

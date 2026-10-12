@@ -149,12 +149,75 @@ bool Endpoint::add(CapabilitySpec spec) {
         // An emergency capability that needs confirmation is not an emergency stop.
         if (!confirm->is_bool() || (emergency && confirm->boolean)) return false;
     }
+    if (const json::Value* ms = safety.find("max_duration_ms")) {
+        // Whole milliseconds > 0; an emergency capability cannot be time limited.
+        if (!ms->is_number() || !(ms->number >= 1) ||
+            ms->number != static_cast<double>(static_cast<long long>(ms->number)) || emergency) {
+            return false;
+        }
+        rate.max_duration_s = ms->number / 1000.0;
+    }
     if (const json::Value* hz = safety.find("max_rate_hz")) {
         if (!hz->is_number() || !(hz->number > 0)) return false;
         if (!emergency) rate.min_interval_s = 1.0 / hz->number;
     }
     capabilities_.push_back(std::move(spec));
     rates_.push_back(rate);
+    return true;
+}
+
+double Endpoint::now_s() const {
+    return clock_ ? clock_()
+                  : std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
+}
+
+bool Endpoint::set_safe_state(const std::string& capability, bool safe_on_boot) {
+    for (const auto& cap : capabilities_) {
+        if (cap.name != capability) continue;
+        json::Value safety;
+        json::Value parameters;
+        std::string error;
+        json::parse(cap.safety_json, safety, error);
+        json::parse(cap.parameters_json, parameters, error);
+        const json::Value* emergency = safety.find("emergency");
+        const json::Value* required = parameters.find("required");
+        if (emergency == nullptr || !emergency->is_bool() || !emergency->boolean) return false;
+        if (required != nullptr && !required->items.empty()) return false;
+        safe_state_ = capability;
+        safe_on_boot_ = safe_on_boot;
+        return true;
+    }
+    return false;
+}
+
+bool Endpoint::validate_safety() const {
+    if (!safe_state_.empty()) return true;
+    for (const auto& r : rates_) {
+        if (r.max_duration_s > 0) return false;
+    }
+    return true;
+}
+
+bool Endpoint::tick() {
+    if (safe_state_.empty()) return false;
+    double now = now_s();
+    bool expired = false;
+    for (const auto& r : rates_) {
+        expired = expired || (r.armed && r.deadline_s <= now);
+    }
+    if (!expired) return false;
+    for (auto& r : rates_) r.armed = false;
+    static const json::Value kNoArguments = [] {
+        json::Value empty;
+        empty.type = json::Value::Type::Object;
+        return empty;
+    }();
+    for (const auto& cap : capabilities_) {
+        if (cap.name == safe_state_) {
+            cap.handler(kNoArguments);
+            break;
+        }
+    }
     return true;
 }
 
@@ -338,7 +401,12 @@ std::string Endpoint::manifest() const {
         out += ",\"returns\":" + cap.returns_json;
         out += ",\"safety\":" + cap.safety_json + "}";
     }
-    out += "]}";
+    out += "]";
+    if (!safe_state_.empty()) {
+        out += ",\"safety_kernel\":{\"safe_state\":" + json::quote(safe_state_) +
+               ",\"safe_on_boot\":" + (safe_on_boot_ ? "true" : "false") + "}";
+    }
+    out += "}";
     return out;
 }
 
@@ -411,9 +479,7 @@ Response Endpoint::invoke(const std::string& body) const {
         }
         RateState& rate = rates_[index];
         if (rate.min_interval_s > 0) {
-            double now = clock_ ? clock_()
-                                : std::chrono::duration<double>(
-                                      std::chrono::steady_clock::now() - started_).count();
+            double now = now_s();
             if (rate.has_last && now - rate.last_s < rate.min_interval_s) {
                 long wait_ms = static_cast<long>((rate.min_interval_s - (now - rate.last_s)) * 1000) + 1;
                 return error_response(429, "RateLimited",
@@ -424,6 +490,15 @@ Response Endpoint::invoke(const std::string& body) const {
             rate.last_s = now;
         }
         InvokeResult result = cap.handler(*arguments);
+        if (result.status == InvokeResult::Status::Ok) {
+            if (cap.name == safe_state_) {
+                for (auto& r : rates_) r.armed = false;
+            }
+            if (rate.max_duration_s > 0) {
+                rate.armed = true;
+                rate.deadline_s = now_s() + rate.max_duration_s;
+            }
+        }
         switch (result.status) {
             case InvokeResult::Status::Ok:
                 return {200,
