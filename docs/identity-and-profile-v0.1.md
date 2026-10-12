@@ -90,7 +90,9 @@ device names the exact version it was built against.
 
 A required check that is present but `failed` still conforms; `/status`
 reports the failure. Missing optional capabilities are listed but never fail
-conformance. The Python SDK implements this as
+conformance. A device that declares a `motion` capability must also declare a
+safe state, or it does not conform (`missing_safe_state`; see
+`safety-kernel-v0.1.md`). The Python SDK implements this as
 `dc_device.conformance(profile, manifest, status)`; dc-edge combines the
 result with health and policy to decide READY / DEGRADED / BLOCKED.
 

@@ -48,6 +48,29 @@ A device that declares any `max_duration_ms` must have a safe state.
 start; ESP32 firmware must call it once after registration and not serve if it
 returns false.
 
+## Moving devices must have a safe state (gap 11)
+
+A capability that can cause physical motion, or other hazardous actuation,
+declares `safety.motion: true`. The rule:
+
+> A device with any `motion` capability must declare `safety_kernel.safe_state`,
+> and that capability must be an `emergency` capability that needs no arguments.
+
+It is checked in three places:
+
+- `validate_safety()` fails (Python `serve()` refuses to start; ESP32 firmware
+  must not serve).
+- `conformance()` reports `missing_safe_state: true` and `conforms: false`, so a
+  consumer does not judge the device ready. It also fails when `safe_state`
+  names a capability that is not `emergency` in the manifest.
+- Devices without any `motion` capability need none of this.
+
+`motion` is a declaration by the device author. The library cannot tell whether
+an LED or a motor is behind a handler, so a device that forgets to mark a
+moving capability escapes the rule. Profiles for moving device classes should
+list the stop capability as required, so omission shows up as a missing
+capability as well. (The shipped robot car profile does not yet.)
+
 ## Running the watchdog
 
 The kernel only acts when `tick()` is called.
@@ -68,9 +91,8 @@ meaningful.
 - **Stale-command rejection**: gap 12 (`issued_at` / `valid_ms`). The two work
   together: freshness rejects an old command arriving late, the kernel stops an
   old command that is still running.
-- **Mandatory stop capability** on any device that can move: gap 11. Today
-  nothing forces a moving device to declare `safety_kernel`.
 - **Hardware watchdogs and brown-out behavior**: firmware concerns, not
   something the contract can express yet.
-- The reference ESP32 robot car declares no `max_duration_ms` and no stop
-  capability yet.
+- The reference ESP32 robot car marks `servo.pan` as `motion`, declares
+  `servo.stop` (stops the PWM pulse train, so the servo goes limp) as its safe
+  state, and has no `max_duration_ms`. It has not been run on hardware.
