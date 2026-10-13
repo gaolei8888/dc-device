@@ -1,0 +1,16 @@
+menu "dc-device bringup"
+
+config DC_DEVICE_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+
+config DC_DEVICE_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+
+config DC_DEVICE_HTTP_PORT
+    int "HTTP port"
+    default 8787
+    range 1 65535
+
+endmenu

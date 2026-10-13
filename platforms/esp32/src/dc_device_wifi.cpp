@@ -71,6 +71,8 @@ bool connect_wifi(const WifiConfig& config) {
     if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) return false;
     if (esp_wifi_set_config(WIFI_IF_STA, &wifi_config) != ESP_OK) return false;
     if (esp_wifi_start() != ESP_OK) return false;
+    // Modem sleep delays inbound packets; a device that serves HTTP must stay awake.
+    if (esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK) return false;
 
     EventBits_t bits = xEventGroupWaitBits(
         s_wifi_event_group,
@@ -80,7 +82,7 @@ bool connect_wifi(const WifiConfig& config) {
         portMAX_DELAY);
 
     bool connected = (bits & WIFI_CONNECTED_BIT) != 0;
-    ESP_LOGI(TAG, connected ? "Wi-Fi connected" : "Wi-Fi connection failed");
+    ESP_LOGI(TAG, "%s", connected ? "Wi-Fi connected" : "Wi-Fi connection failed");
     return connected;
 #else
     (void)config;
