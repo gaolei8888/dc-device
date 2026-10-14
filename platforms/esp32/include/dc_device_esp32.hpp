@@ -18,12 +18,13 @@ private:
 class PwmOutput {
 public:
     PwmOutput(int pin, int channel) : pin_(pin), channel_(channel) {}
-    bool begin(int frequency_hz = 50, int resolution_bits = 16);
+    bool begin(int frequency_hz = 50, int resolution_bits = 14);
     bool write_duty(float duty_0_to_1);
 
 private:
     int pin_;
     int channel_;
+    int resolution_bits_ = 14;
 };
 
 class Servo {

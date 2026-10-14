@@ -33,6 +33,7 @@ bool GpioOutput::write(bool high) {
 
 bool PwmOutput::begin(int frequency_hz, int resolution_bits) {
 #ifdef ESP_PLATFORM
+    resolution_bits_ = resolution_bits;
     ledc_timer_config_t timer{};
     timer.speed_mode = LEDC_LOW_SPEED_MODE;
     timer.timer_num = LEDC_TIMER_0;
@@ -63,7 +64,7 @@ bool PwmOutput::write_duty(float duty_0_to_1) {
         return false;
     }
 #ifdef ESP_PLATFORM
-    constexpr uint32_t max_duty = 65535;
+    const uint32_t max_duty = (1u << resolution_bits_) - 1;
     uint32_t duty = static_cast<uint32_t>(duty_0_to_1 * max_duty);
     if (ledc_set_duty(
             LEDC_LOW_SPEED_MODE,
@@ -80,7 +81,8 @@ bool PwmOutput::write_duty(float duty_0_to_1) {
 }
 
 bool Servo::begin() {
-    return pwm_.begin(50, 16);
+    // 14 bits is the most an ESP32-S3 LEDC timer supports at 50 Hz.
+    return pwm_.begin(50, 14);
 }
 
 bool Servo::write_angle(float angle_deg) {
