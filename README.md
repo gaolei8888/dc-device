@@ -128,6 +128,12 @@ discover
 
 The long-term target is zero-touch device onboarding: users should not need to understand ports, drivers, IP addresses, vendor SDK details, or protocol internals for normal supported hardware.
 
+## AI-assisted hardware discovery (proposal)
+
+Beyond matching known device profiles, dc-device is exploring **evidence-based adaptation for unfamiliar hardware**: passive discovery, authorized reference trace capture, protocol hypothesis generation, simulator replay, and supervised physical verification. This is a design proposal, **not an implemented feature**. Generated adapters must never bypass dc-edge safety and approval.
+
+See [Hardware Discovery & AI-Assisted Device Adaptation](docs/hardware-discovery-ai-assisted-adaptation.md) for contracts, project boundaries, safeguards, and the P0–P2 roadmap.
+
 ## Initial scope
 
 ### v0.1
