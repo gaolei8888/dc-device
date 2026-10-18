@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "dc_device_chip.hpp"
 #include "dc_device_endpoint.hpp"
 #include "dc_device_json.hpp"
 
@@ -518,6 +519,30 @@ static void test_identity() {
     CHECK(ep.set_identity(ok));
 }
 
+static void test_chip_facts() {
+    dc_device::esp32::ChipFacts f;
+    f.model = "esp32s3";
+    f.revision = "v0.2";
+    f.cores = 2;
+    f.features = {"wifi", "ble"};
+    f.flash_bytes = 16777216;
+    f.mac = "B8F862E96740";
+    f.idf_version = "v5.4.4";
+    f.reset_reason = "poweron";
+    // PSRAM was not reported: null, not zero.
+    CHECK_EQ(dc_device::esp32::chip_facts_json(f),
+        R"({"model":"esp32s3","revision":"v0.2","cores":2,"features":["wifi","ble"],)"
+        R"("flash_bytes":16777216,"psram_bytes":null,"mac":"B8F862E96740",)"
+        R"("idf_version":"v5.4.4","reset_reason":"poweron"})");
+    f.psram_bytes = 0;  // reported as really absent
+    f.flash_bytes = -1;
+    json::Value v;
+    std::string err;
+    CHECK(json::parse(dc_device::esp32::chip_facts_json(f), v, err));
+    CHECK(v.find("psram_bytes") != nullptr && v.find("psram_bytes")->number == 0);
+    CHECK(v.find("flash_bytes") != nullptr && v.find("flash_bytes")->type == json::Value::Type::Null);
+}
+
 int main() {
     test_identity();
     test_health_registration();
@@ -529,6 +554,7 @@ int main() {
     test_invoke();
     test_rate_limit();
     test_safety_kernel();
+    test_chip_facts();
     if (g_failures == 0) {
         std::printf("all tests passed\n");
         return 0;

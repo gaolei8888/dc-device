@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <string>
 
+#include "dc_device_chip.hpp"
 #include "dc_device_endpoint.hpp"
 #include "dc_device_http_server.hpp"
 #include "dc_device_wifi.hpp"
@@ -53,6 +54,7 @@ extern "C" void app_main() {
         id.serial = serial;
     }
     endpoint.set_identity(std::move(id));
+    dc_device::esp32::register_chip_diagnostics(endpoint);
     endpoint.add_diagnostic("free_heap_bytes", [] { return std::to_string(esp_get_free_heap_size()); });
 
     dc_device::esp32::WifiConfig wifi;

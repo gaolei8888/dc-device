@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <string>
 
+#include "dc_device_chip.hpp"
 #include "dc_device_endpoint.hpp"
 #include "dc_device_esp32.hpp"
 #include "dc_device_http_server.hpp"
@@ -168,6 +169,7 @@ static void register_health() {
     endpoint.add_self_test("led_blink", selftest_led_blink);
     endpoint.add_self_test("servo_sweep", selftest_servo_sweep);
 #ifdef ESP_PLATFORM
+    dc_device::esp32::register_chip_diagnostics(endpoint);
     endpoint.add_diagnostic("free_heap_bytes", [] { return std::to_string(esp_get_free_heap_size()); });
     endpoint.add_diagnostic("min_free_heap_bytes",
                             [] { return std::to_string(esp_get_minimum_free_heap_size()); });
