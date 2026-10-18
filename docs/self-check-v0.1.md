@@ -1,10 +1,17 @@
 # Self-check v0.1
 
-Status: draft. Implemented and run on one real ESP32-S3 board: the chip facts
-(level 1), the detector framework, and the camera detector reading a known map
-(level 2). Not yet run on hardware: the bounded scan (level 3), the microphone,
-servo and motor tests, the `unverified` health state. Host tests cover the
-framework and the pin table.
+Status: draft. Implemented and run on two real ESP32-S3 boards of the same model:
+the chip facts, the detector framework, an I2C detector that finds the buses with
+no pin table (pairs among the pins something holds high first, then every safe
+pair) and identifies the chips it knows by id, and an input-only pin survey.
+Blind runs, 12 reboots, first self test after boot each time, under 1 s: board 1
+finds its camera (OV2640) on GPIO 4/5 and two unrecognised devices (0x40, 0x70) on
+GPIO 47/48; board 2 finds the same two on 47/48 and no camera. Not yet run on
+hardware: identification of any chip other than the camera (the table is tested
+only against fake devices), the microphone, the speaker loop, camera-as-observer,
+servo and motor tests, the `unverified` health state. The audio analysis code is
+written and host-tested; no I2S driver uses it yet. Host tests cover the
+framework, the pin table, the id table and the audio analysis.
 
 ## Requirement
 
@@ -25,6 +32,26 @@ This is a requirement on every dc-device device, not only on a camera.
 
 Class C must never be reported as `ok` from software alone. The contract needs a
 state for it (see "Contract changes").
+
+## Observers: one peripheral checks another
+
+A peripheral with no signal of its own (class C) can still be checked when another
+peripheral on the same board can observe its effect. This turns many "unverified"
+into `ok`, with the observer named as evidence. None of it is built or tried yet.
+
+| Peripheral | Observer | Test |
+|---|---|---|
+| Speaker | Microphone | Play a tone, look for that frequency in the samples. Checks both at once. |
+| Microphone | Speaker | The same loop, from the other side. A microphone alone is checked by its samples varying. |
+| Display, LED | Camera | Show or light a known pattern and compare frames. Works only if it is in the camera's view. |
+| Servo, motor | Camera, or an encoder | Move a little and compare frames or count encoder edges. Same condition. |
+| Button | A person | The device cannot press it; it waits for a press and reports it. |
+| Wired pins | None needed | Read every safe pin as an input with a pull-up, then a pull-down. A pin that does not follow the pull is wired to something. Input only, drives nothing. Tells where to look, not what is there. |
+
+Limits: an observer must exist and be able to see or hear the effect. A speaker in
+a room with the microphone covered, an LED out of the camera's view or a servo
+nothing watches stay `unverified`. The result names the observer, so a failed
+loop is not blamed on the wrong part.
 
 ## How the wiring is found
 
@@ -137,6 +164,39 @@ contract change and is not decided here.
 5. The `unverified` state in the contract, the SDK and the conformance check.
 6. Servo and motor tests, after the moving-self-test question above is decided.
 7. The data-line detection idea, only after the above works on hardware.
+
+## Lessons from the first hardware runs
+
+- The board's I2C lines use the chip's internal pull-ups (about 45 kOhm). A single
+  probe sometimes got an acknowledge from nothing, at random addresses, on 2 of 6
+  boots. A device now counts only after three probes in a row answer, and a known
+  device is gone only after three in a row do not. 12 boots after the change: no
+  phantom device.
+- Building and tearing down a bus on every `/status` glitched the sensor and, after
+  a probe timeout, hung the driver until the watchdog reset the chip. The bus stays
+  open once a device was found, and a timed-out probe ends the attempt.
+- Running a detector inside the HTTP task needs more than the default 4096-byte
+  stack.
+- A scan that finds no device at all is reported as `not_found`, which degrades
+  `/status`. A board that has no I2C device would be degraded forever. Whether a
+  profile should say which peripherals are expected is open.
+
+- The first scan after boot cost 8.5 s and ended at its time budget before reaching
+  the pair that held a real bus. A bus needs pull-ups, so the scan now tries the
+  pairs among the pins that stay high with a pull-down on first (a few
+  milliseconds) and searches all pairs only if no bus was found. Cost: a second bus
+  with no external pull-ups is missed when another bus was found.
+- Two detectors that touch pins must not undo each other: the pin survey reset the
+  pins of an open I2C bus and broke it. Detectors now claim the pins they hold
+  (`claim_pin`) and a survey skips claimed pins.
+- A peripheral only a person can check (speaker, screen) is reported `unverified` with
+  a `confirm` object: the capability that exercises it and the question to ask. The
+  device cannot store the answer. Where a host keeps "the user confirmed this at this
+  time", and for how long it stays valid, is not decided.
+- Registering detectors in `app_main` overflowed the main task's default 3584-byte
+  stack after the fifth one and caused a boot loop; the examples now set 8192.
+- Reading the report after a Quick run hides what the Full run said (a Quick run
+  replaces the rows). A scan cut short by its budget was invisible this way.
 
 ## Open items
 
