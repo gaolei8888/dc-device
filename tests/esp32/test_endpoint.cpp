@@ -7,6 +7,7 @@
 
 #include "dc_device_chip.hpp"
 #include "dc_device_endpoint.hpp"
+#include "dc_device_pins.hpp"
 #include "dc_device_selfcheck.hpp"
 #include "dc_device_json.hpp"
 
@@ -613,6 +614,21 @@ static void test_selfcheck() {
     CHECK(r.body.find("mic (samples constant)") != std::string::npos);
 }
 
+static void test_scan_pins() {
+    using namespace dc_device::esp32;
+    CHECK(safe_scan_pins("unknown_chip").empty());  // no table, no search
+    CHECK(safe_scan_pins("esp32").empty());
+    std::vector<int> pins = safe_scan_pins("esp32s3");
+    CHECK(pins.size() == 25);
+    for (int reserved : {0, 3, 19, 20, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 43, 44, 45, 46}) {
+        for (int p : pins) CHECK(p != reserved);
+    }
+    CHECK(ordered_pairs(pins).size() == 25 * 24);
+    auto two = ordered_pairs({4, 5});
+    CHECK(two.size() == 2 && two[0].first == 4 && two[0].second == 5 && two[1].first == 5 && two[1].second == 4);
+    CHECK(ordered_pairs({7}).empty());
+}
+
 int main() {
     test_identity();
     test_health_registration();
@@ -626,6 +642,7 @@ int main() {
     test_safety_kernel();
     test_chip_facts();
     test_selfcheck();
+    test_scan_pins();
     if (g_failures == 0) {
         std::printf("all tests passed\n");
         return 0;

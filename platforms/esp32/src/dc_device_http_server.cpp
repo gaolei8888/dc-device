@@ -76,6 +76,7 @@ bool HttpServer::start(const HttpServerConfig& config) {
 
     httpd_config_t httpd_config = HTTPD_DEFAULT_CONFIG();
     httpd_config.server_port = config.port;
+    httpd_config.stack_size = config.stack_size;
     // Route everything through Endpoint::handle() so 404s and the JSON error
     // shape come from one place.
     httpd_config.uri_match_fn = httpd_uri_match_wildcard;
