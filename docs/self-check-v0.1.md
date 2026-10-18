@@ -1,8 +1,10 @@
 # Self-check v0.1
 
-Status: draft. A requirement and a design; nothing here is implemented except the
-camera bus probe in `examples/esp32/camera_probe`, which is a one-off with fixed
-pins and is to be replaced. Nothing was run beyond a build.
+Status: draft. Implemented and run on one real ESP32-S3 board: the chip facts
+(level 1), the detector framework, and the camera detector reading a known map
+(level 2). Not yet run on hardware: the bounded scan (level 3), the microphone,
+servo and motor tests, the `unverified` health state. Host tests cover the
+framework and the pin table.
 
 ## Requirement
 
