@@ -43,7 +43,10 @@ Schemas: `schemas/device-health.schema.json`, `schemas/device-diagnostics.schema
 `GET /status` runs only the cheap, read-only checks. `POST /self_test` runs
 those plus the self-test checks, which are allowed to move things (blink the
 LED, sweep the servo). Self-tests are serialized: a second request while one
-is running waits for it.
+is running waits for it. Within one `POST /self_test`, the self tests run first and
+the cheap checks after them, so a cheap check sees what a self test just found
+(for example the wiring a discovery test located). The report lists the checks in
+their usual order.
 
 The HTTP status is `200` whenever the device could produce a report, including
 `failed` reports. A failing check is data, not a transport error. A check that
