@@ -10,5 +10,6 @@ ${CXX:-c++} -std=c++17 -Wall -Wextra -Werror \
     platforms/esp32/src/dc_device_endpoint.cpp \
     platforms/esp32/src/dc_device_json.cpp \
     platforms/esp32/src/dc_device_chip.cpp \
+    platforms/esp32/src/dc_device_selfcheck.cpp \
     -o "$OUT"
 "$OUT"

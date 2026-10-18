@@ -4,6 +4,7 @@ idf_component_register(
          "../../../../platforms/esp32/src/dc_device_wifi.cpp"
          "../../../../platforms/esp32/src/dc_device_json.cpp"
          "../../../../platforms/esp32/src/dc_device_chip.cpp"
+         "../../../../platforms/esp32/src/dc_device_selfcheck.cpp"
          "../../../../platforms/esp32/src/dc_device_endpoint.cpp"
          "../../../../platforms/esp32/src/dc_device_http_server.cpp"
     INCLUDE_DIRS "../../../../platforms/esp32/include"

@@ -298,14 +298,22 @@ bool Endpoint::add_diagnostic(std::string name, DiagnosticProvider provider) {
 }
 
 std::string Endpoint::report(const std::vector<const NamedCheck*>& checks,
-                             std::string* status_out) const {
+                             std::string* status_out, size_t run_first_from) const {
     std::string states;
     std::string issues;
     bool any_failed = false;
     bool any_warning = false;
 
-    for (const NamedCheck* named : checks) {
-        CheckResult result = named->check();
+    // Entries from `run_first_from` on (the self tests) run before the ones
+    // ahead of them (the health checks), so a health check sees what a self test
+    // just found. The report keeps its original order.
+    std::vector<CheckResult> results(checks.size());
+    for (size_t i = run_first_from; i < checks.size(); ++i) results[i] = checks[i]->check();
+    for (size_t i = 0; i < run_first_from && i < checks.size(); ++i) results[i] = checks[i]->check();
+
+    for (size_t idx = 0; idx < checks.size(); ++idx) {
+        const NamedCheck* named = checks[idx];
+        const CheckResult& result = results[idx];
         const char* state = "ok";
         const char* severity = nullptr;
         const char* default_code = nullptr;
@@ -355,8 +363,9 @@ std::string Endpoint::self_test() const {
     // esp_http_server runs handlers on one task, so self tests never overlap.
     std::vector<const NamedCheck*> checks;
     for (const auto& c : health_checks_) checks.push_back(&c);
+    size_t first_self_test = checks.size();
     for (const auto& c : self_tests_) checks.push_back(&c);
-    last_self_test_ = report(checks, nullptr);
+    last_self_test_ = report(checks, nullptr, first_self_test);
     return last_self_test_;
 }
 

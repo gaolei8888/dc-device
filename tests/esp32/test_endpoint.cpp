@@ -7,6 +7,7 @@
 
 #include "dc_device_chip.hpp"
 #include "dc_device_endpoint.hpp"
+#include "dc_device_selfcheck.hpp"
 #include "dc_device_json.hpp"
 
 using namespace dc_device;
@@ -543,6 +544,75 @@ static void test_chip_facts() {
     CHECK(v.find("flash_bytes") != nullptr && v.find("flash_bytes")->type == json::Value::Type::Null);
 }
 
+static void test_selfcheck() {
+    using namespace dc_device::esp32;
+    SelfCheck sc;
+    int full_runs = 0, quick_runs = 0;
+    // A bus device that is only found by scanning: not found in Quick mode.
+    bool located = false;
+    CHECK(sc.add({"camera", PeripheralClass::Bus, [&](Mode m) {
+        (m == Mode::Full ? full_runs : quick_runs)++;
+        if (!located && m == Mode::Full) located = true;  // scan finds it
+        if (!located) return Finding{Verdict::NotFound, "nothing at the known pins", "", ""};
+        return m == Mode::Full ? Finding{Verdict::Ok, "chip id 0x2642", "SDA 4, SCL 5", "scan"}
+                                : Finding{Verdict::Ok, "chip id 0x2642", "", ""};
+    }}));
+    CHECK(sc.add({"led", PeripheralClass::NoSignal, [](Mode) {
+        return Finding{Verdict::Unverified, "no feedback", "GPIO 2", ""};
+    }}));
+    CHECK(!sc.add({"led", PeripheralClass::NoSignal, [](Mode) { return Finding{}; }}));  // duplicate
+    CHECK(!sc.add({"", PeripheralClass::Bus, [](Mode) { return Finding{}; }}));          // no name
+    CHECK(!sc.add({"x", PeripheralClass::Bus, nullptr}));                                 // no function
+    CHECK(sc.size() == 2);
+
+    // Before any run every verdict is not_run.
+    CHECK_EQ(sc.report_json(),
+        R"({"ran":false,"mode":"quick","peripherals":[)"
+        R"({"name":"camera","class":"bus","verdict":"not_run","evidence":"","wiring":"","source":""},)"
+        R"({"name":"led","class":"no_signal","verdict":"not_run","evidence":"","wiring":"","source":""}]})");
+
+    Endpoint ep("dev", "t", "Dev");
+    CHECK(attach_self_check(ep, sc));
+    CHECK(!attach_self_check(ep, sc));  // names already taken
+
+    // /status runs Quick only: the camera is not found, which is a warning.
+    Response r = ep.handle("GET", "/status", "");
+    CHECK(full_runs == 0 && quick_runs == 1);
+    CHECK(r.body.find("\"status\":\"degraded\"") != std::string::npos);
+    CHECK(r.body.find("PERIPHERAL_NOT_FOUND") != std::string::npos);
+    // An unverified peripheral alone does not degrade the device.
+    CHECK(r.body.find("led") == std::string::npos);
+
+    // /self_test runs Full, finds the camera, and the device is healthy.
+    r = ep.handle("POST", "/self_test", "");
+    CHECK(full_runs == 1);
+    CHECK(r.body.find("\"status\":\"ok\"") != std::string::npos);
+
+    // The evidence and the wiring are in /diagnostics, including the unverified LED.
+    r = ep.handle("GET", "/diagnostics", "");
+    CHECK(r.body.find("\"verdict\":\"unverified\"") != std::string::npos);
+    CHECK(r.body.find("\"wiring\":\"SDA 4, SCL 5\"") != std::string::npos);
+    CHECK(r.body.find("\"source\":\"scan\"") != std::string::npos);
+
+    // Afterwards /status finds it again without scanning.
+    r = ep.handle("GET", "/status", "");
+    CHECK(full_runs == 1 && quick_runs == 4);  // each of /status, /self_test, /diagnostics, /status ran one Quick
+    CHECK(r.body.find("\"status\":\"ok\"") != std::string::npos);
+    CHECK(r.body.find("\"status\":\"ok\"") != std::string::npos);
+
+    // A failing detector makes the device failed and names it.
+    SelfCheck bad;
+    bad.add({"mic", PeripheralClass::Signal, [](Mode) {
+        return Finding{Verdict::Failed, "samples constant", "", ""};
+    }});
+    Endpoint ep2("dev2", "t", "Dev2");
+    attach_self_check(ep2, bad);
+    r = ep2.handle("GET", "/status", "");
+    CHECK(r.body.find("\"status\":\"failed\"") != std::string::npos);
+    CHECK(r.body.find("PERIPHERAL_FAILED") != std::string::npos);
+    CHECK(r.body.find("mic (samples constant)") != std::string::npos);
+}
+
 int main() {
     test_identity();
     test_health_registration();
@@ -555,6 +625,7 @@ int main() {
     test_rate_limit();
     test_safety_kernel();
     test_chip_facts();
+    test_selfcheck();
     if (g_failures == 0) {
         std::printf("all tests passed\n");
         return 0;

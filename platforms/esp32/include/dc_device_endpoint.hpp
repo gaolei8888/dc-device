@@ -144,7 +144,8 @@ private:
 
     Response invoke(const std::string& body) const;
     bool name_taken(const std::string& name) const;
-    std::string report(const std::vector<const NamedCheck*>& checks, std::string* status_out) const;
+    std::string report(const std::vector<const NamedCheck*>& checks, std::string* status_out,
+                       size_t run_first_from = static_cast<size_t>(-1)) const;
 
     std::string id_;
     std::string type_;
