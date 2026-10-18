@@ -1,6 +1,19 @@
 #include "dc_device_pins.hpp"
 
+#include <set>
+
 namespace dc_device::esp32 {
+
+namespace {
+std::set<int>& claimed() {
+    static std::set<int> pins;
+    return pins;
+}
+}  // namespace
+
+void claim_pin(int pin) { claimed().insert(pin); }
+void release_pin(int pin) { claimed().erase(pin); }
+bool pin_claimed(int pin) { return claimed().count(pin) != 0; }
 
 std::vector<int> safe_scan_pins(const std::string& chip_model) {
     std::vector<int> pins;

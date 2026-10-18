@@ -1,18 +1,27 @@
 // Camera board: joins Wi-Fi, serves the dc-device HTTP contract and checks its
-// own peripherals (docs/self-check-v0.1.md). The camera is found by reading the
-// sensor's chip id; nobody has to say which pins it is on. /status re-checks the
+// own peripherals (docs/self-check-v0.1.md). I2C devices (the camera sensor, and
+// any IMU, codec or touch chip) are found by their chip ids; nobody has to say
+// which pins they are on. /status re-checks the
 // known or cached wiring; POST /self_test may search for it. Nothing here drives
 // a data line or takes a frame.
+#include <cmath>
 #include <cstdio>
 #include <string>
 
-#include "dc_device_camera_detect.hpp"
+#include "dc_device_i2c_detect.hpp"
+#include "dc_device_mic_detect.hpp"
+#include "dc_device_pin_survey.hpp"
+#include <vector>
 #include "dc_device_chip.hpp"
 #include "dc_device_endpoint.hpp"
 #include "dc_device_http_server.hpp"
 #include "dc_device_selfcheck.hpp"
 #include "dc_device_wifi.hpp"
 
+#include "driver/gpio.h"
+#include "driver/i2s_std.h"
+#include "driver/spi_master.h"
+#include "esp_heap_caps.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -24,6 +33,156 @@ using dc_device::esp32::CheckResult;
 using dc_device::esp32::Endpoint;
 using dc_device::esp32::InvokeResult;
 namespace json = dc_device::json;
+
+
+// Pins from the board's original program (the same two boards). Used only by the
+// two tests below, which need a person to see or hear the result.
+namespace {
+std::string g_screen_error;  // first failing step of screen_test()
+void note(const char* step, esp_err_t e) {
+    if (e != ESP_OK && g_screen_error.empty()) g_screen_error = std::string(step) + ": " + esp_err_to_name(e);
+}
+constexpr int kSpkBclk = 42, kSpkWs = 39, kSpkDout = 41;
+constexpr int kTftSck = 46, kTftMosi = 3, kTftDc = 1, kTftCs = 14;
+
+// A short, quiet tone on the I2S speaker output.
+bool beep(int freq_hz, int ms, int amplitude) {
+    i2s_chan_handle_t tx = nullptr;
+    i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
+    if (i2s_new_channel(&cc, &tx, nullptr) != ESP_OK) return false;
+    i2s_std_config_t sc{};
+    sc.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000);
+    sc.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
+    sc.gpio_cfg.mclk = I2S_GPIO_UNUSED;
+    sc.gpio_cfg.bclk = static_cast<gpio_num_t>(kSpkBclk);
+    sc.gpio_cfg.ws = static_cast<gpio_num_t>(kSpkWs);
+    sc.gpio_cfg.dout = static_cast<gpio_num_t>(kSpkDout);
+    sc.gpio_cfg.din = I2S_GPIO_UNUSED;
+    if (i2s_channel_init_std_mode(tx, &sc) != ESP_OK || i2s_channel_enable(tx) != ESP_OK) {
+        i2s_del_channel(tx);
+        return false;
+    }
+    const int samples = 16000 * ms / 1000;
+    std::vector<int16_t> buf(samples);
+    for (int i = 0; i < samples; ++i) {
+        buf[i] = static_cast<int16_t>(amplitude * std::sin(2.0 * 3.14159265 * freq_hz * i / 16000.0));
+    }
+    size_t written = 0;
+    i2s_channel_write(tx, buf.data(), buf.size() * sizeof(int16_t), &written, 2000);
+    std::vector<int16_t> silence(3200, 0);  // let the amplifier settle, no click
+    i2s_channel_write(tx, silence.data(), silence.size() * sizeof(int16_t), &written, 1000);
+    i2s_channel_disable(tx);
+    i2s_del_channel(tx);
+    for (int p : {kSpkBclk, kSpkWs, kSpkDout}) {
+        gpio_reset_pin(static_cast<gpio_num_t>(p));
+        gpio_set_direction(static_cast<gpio_num_t>(p), GPIO_MODE_OUTPUT);
+        gpio_set_level(static_cast<gpio_num_t>(p), 0);  // the original program parks them low
+    }
+    return true;
+}
+
+// ST7789, 240x320, written only: nothing can be read back. Fills the screen with
+// red, green, blue, then black.
+bool tft_cmd(spi_device_handle_t dev, uint8_t cmd, const uint8_t* data = nullptr, size_t n = 0) {
+    gpio_set_level(static_cast<gpio_num_t>(kTftDc), 0);
+    spi_transaction_t t{};
+    t.length = 8;
+    t.tx_buffer = &cmd;
+    esp_err_t e1 = spi_device_polling_transmit(dev, &t);
+    note("command byte", e1);
+    if (e1 != ESP_OK) return false;
+    if (n > 0) {
+        gpio_set_level(static_cast<gpio_num_t>(kTftDc), 1);
+        spi_transaction_t d{};
+        d.length = n * 8;
+        d.tx_buffer = data;
+        if (spi_device_polling_transmit(dev, &d) != ESP_OK) return false;
+    }
+    return true;
+}
+
+bool tft_fill(spi_device_handle_t dev, uint16_t color) {
+    const uint8_t col[4] = {0, 0, 0, 239}, row[4] = {0, 0, 0x01, 0x3F};
+    if (!tft_cmd(dev, 0x2A, col, 4) || !tft_cmd(dev, 0x2B, row, 4)) return false;
+    uint8_t* chunk = static_cast<uint8_t*>(heap_caps_malloc(4096, MALLOC_CAP_DMA));
+    if (chunk == nullptr) return false;
+    for (int i = 0; i < 4096; i += 2) {
+        chunk[i] = color >> 8;
+        chunk[i + 1] = color & 0xFF;
+    }
+    uint8_t ramwr = 0x2C;
+    gpio_set_level(static_cast<gpio_num_t>(kTftDc), 0);
+    spi_transaction_t t{};
+    t.length = 8;
+    t.tx_buffer = &ramwr;
+    esp_err_t re = spi_device_polling_transmit(dev, &t);
+    note("RAMWR", re);
+    bool ok = re == ESP_OK;
+    gpio_set_level(static_cast<gpio_num_t>(kTftDc), 1);
+    size_t left = 240 * 320 * 2;
+    while (ok && left > 0) {
+        size_t n = left < 4096 ? left : 4096;
+        spi_transaction_t d{};
+        d.length = n * 8;
+        d.tx_buffer = chunk;
+        esp_err_t de = spi_device_polling_transmit(dev, &d);
+        note("pixel data", de);
+        ok = de == ESP_OK;
+        left -= n;
+    }
+    heap_caps_free(chunk);
+    return ok;
+}
+
+bool screen_test() {
+    gpio_config_t dc{};
+    dc.pin_bit_mask = 1ULL << kTftDc;
+    dc.mode = GPIO_MODE_OUTPUT;
+    gpio_config(&dc);
+    spi_bus_config_t bus{};
+    bus.mosi_io_num = kTftMosi;
+    bus.miso_io_num = -1;
+    bus.sclk_io_num = kTftSck;
+    bus.quadwp_io_num = -1;
+    bus.quadhd_io_num = -1;
+    bus.max_transfer_sz = 4096;
+    g_screen_error.clear();
+    esp_err_t be = spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
+    note("spi_bus_initialize", be);
+    if (be != ESP_OK) return false;
+    spi_device_interface_config_t dev_cfg{};
+    dev_cfg.clock_speed_hz = 20 * 1000 * 1000;
+    dev_cfg.mode = 2;  // polarity 1, phase 0, as the original program
+    dev_cfg.spics_io_num = kTftCs;
+    dev_cfg.queue_size = 1;
+    spi_device_handle_t dev = nullptr;
+    esp_err_t ae = spi_bus_add_device(SPI2_HOST, &dev_cfg, &dev);
+    note("spi_bus_add_device", ae);
+    bool ok = ae == ESP_OK;
+    if (ok) {
+        tft_cmd(dev, 0x01);  // software reset
+        vTaskDelay(pdMS_TO_TICKS(150));
+        tft_cmd(dev, 0x11);  // sleep out
+        vTaskDelay(pdMS_TO_TICKS(120));
+        const uint8_t colmod = 0x55;  // 16 bits per pixel
+        tft_cmd(dev, 0x3A, &colmod, 1);
+        const uint8_t madctl = 0x00;
+        tft_cmd(dev, 0x36, &madctl, 1);
+        tft_cmd(dev, 0x21);  // inversion on, as most ST7789 panels need
+        tft_cmd(dev, 0x13);  // normal display mode
+        tft_cmd(dev, 0x29);  // display on
+        vTaskDelay(pdMS_TO_TICKS(50));
+        for (uint16_t color : {uint16_t{0xF800}, uint16_t{0x07E0}, uint16_t{0x001F}, uint16_t{0x0000}}) {
+            ok = tft_fill(dev, color) && ok;
+            vTaskDelay(pdMS_TO_TICKS(700));
+        }
+        spi_bus_remove_device(dev);
+    }
+    spi_bus_free(SPI2_HOST);
+    for (int p : {kTftSck, kTftMosi, kTftDc, kTftCs}) gpio_reset_pin(static_cast<gpio_num_t>(p));
+    return ok;
+}
+}  // namespace
 
 static const char* TAG = "dc-device";
 static Endpoint endpoint("camera_board_01", "camera_board", "ESP32-S3 Camera Board");
@@ -40,6 +199,58 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    // Tests that need a person: they make a sound or light the screen, and nothing
+    // on the board can observe the result.
+    dc_device::esp32::CapabilitySpec bp;
+    bp.name = "speaker.beep";
+    bp.description = "Play one short, quiet beep on the speaker. A person must listen for it.";
+    bp.kind = "action";
+    bp.parameters_json = R"({"type":"object","properties":{}})";
+    bp.safety_json = R"({"max_rate_hz":0.5})";
+    bp.handler = [](const json::Value&) {
+        return beep(880, 300, 2000) ? InvokeResult::success(R"({"played":true})")
+                                    : InvokeResult::failed("Could not start the speaker output");
+    };
+    endpoint.add(bp);
+    dc_device::esp32::CapabilitySpec sc;
+    sc.name = "screen.fill_test";
+    sc.description = "Fill the screen with red, green, blue, then black. A person must watch it.";
+    sc.kind = "action";
+    sc.parameters_json = R"({"type":"object","properties":{}})";
+    sc.safety_json = R"({"max_rate_hz":0.2})";
+    sc.handler = [](const json::Value&) {
+        return screen_test() ? InvokeResult::success(R"({"drawn":true})")
+                             : InvokeResult::failed("Could not drive the screen (" + g_screen_error + ")");
+    };
+    endpoint.add(sc);
+
+    // Debugging aid: try a microphone on given pins. Drives sck and ws.
+    dc_device::esp32::CapabilitySpec trial;
+    trial.name = "debug.mic_try";
+    trial.description = "Debug: read an I2S microphone on the given pins and report the samples.";
+    trial.kind = "sensor";
+    trial.parameters_json =
+        R"({"type":"object","properties":{"sck":{"type":"integer"},"ws":{"type":"integer"},"sd":{"type":"integer"}},"required":["sck","ws","sd"]})";
+    trial.handler = [](const json::Value& a) {
+        int sck = static_cast<int>(a.find("sck")->number), ws = static_cast<int>(a.find("ws")->number),
+            sd = static_cast<int>(a.find("sd")->number);
+        std::vector<int> others;
+        for (int p : dc_device::esp32::pins_floating()) {
+            if (p != sck && p != ws) others.push_back(p);
+        }
+        dc_device::esp32::MicTrial t = dc_device::esp32::try_mic(sck, ws, sd, others);
+        std::string moving;
+        for (int p : t.moving_pins) moving += (moving.empty() ? "" : ",") + std::to_string(p);
+        char buf[320];
+        snprintf(buf, sizeof(buf),
+                 "{\"read_ok\":%s,\"samples\":%u,\"constant\":%s,\"rms\":%.5f,\"low_byte_zero\":%.3f,"
+                 "\"looks_like_mic\":%s,\"moving_pins\":[%s]}",
+                 t.read_ok ? "true" : "false", static_cast<unsigned>(t.samples), t.constant ? "true" : "false", t.rms,
+                 t.low_byte_zero, t.looks_like_mic ? "true" : "false", moving.c_str());
+        return InvokeResult::success(buf);
+    };
+    endpoint.add(trial);
+
     dc_device::esp32::CapabilitySpec heap;
     heap.name = "heap.read";
     heap.description = "Read the free heap size.";
@@ -49,7 +260,20 @@ extern "C" void app_main() {
     endpoint.add(heap);
 
     // A known map is only a starting point: it is checked by reading the sensor.
-    self_check.add(dc_device::esp32::make_camera_detector({{4, 5}}));
+    #if CONFIG_DC_DEVICE_CAMERA_KNOWN_MAP
+    self_check.add(dc_device::esp32::make_i2c_detector({{4, 5}}));
+#else
+    self_check.add(dc_device::esp32::make_i2c_detector({}));
+#endif
+    self_check.add(dc_device::esp32::make_pin_survey_detector());
+    self_check.add(dc_device::esp32::make_mic_detector());
+    // Nothing on the board can observe these two. The pins are from the board's old
+    // program, not measured.
+    self_check.add(dc_device::esp32::make_human_confirmed_detector(
+        "speaker", "BCLK 42, WS 39, DOUT 41", "known_map", "speaker.beep", "Did you hear one short beep?"));
+    self_check.add(dc_device::esp32::make_human_confirmed_detector(
+        "screen", "SCK 46, MOSI 3, DC 1, CS 14", "known_map", "screen.fill_test",
+        "Did the screen turn red, then green, then blue, then black?"));
     dc_device::esp32::attach_self_check(endpoint, self_check);
 
     dc_device::esp32::Identity id;

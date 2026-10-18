@@ -1,12 +1,15 @@
 // Host-side tests for the ESP32 HTTP endpoint core (no ESP-IDF required).
 // Run: tests/esp32/run.sh
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 
+#include "dc_device_audio_analysis.hpp"
 #include "dc_device_chip.hpp"
 #include "dc_device_endpoint.hpp"
+#include "dc_device_i2c_ids.hpp"
 #include "dc_device_pins.hpp"
 #include "dc_device_selfcheck.hpp"
 #include "dc_device_json.hpp"
@@ -612,6 +615,50 @@ static void test_selfcheck() {
     CHECK(r.body.find("\"status\":\"failed\"") != std::string::npos);
     CHECK(r.body.find("PERIPHERAL_FAILED") != std::string::npos);
     CHECK(r.body.find("mic (samples constant)") != std::string::npos);
+
+    // A detector that reports several peripherals, each naming itself.
+    SelfCheck multi;
+    int scans = 0;
+    CHECK(multi.add({"i2c", PeripheralClass::Bus, nullptr, [&](Mode m) {
+        ++scans;
+        std::vector<Finding> v;
+        Finding a{Verdict::Ok, "mpu6050, WHO_AM_I 0x68", "SDA 8, SCL 9", m == Mode::Full ? "scan" : "", "imu", PeripheralClass::Bus};
+        Finding b{Verdict::Ok, "device at 0x76", "SDA 8, SCL 9", "", "i2c:0x76", PeripheralClass::Bus};
+        v.push_back(a);
+        v.push_back(b);
+        return v;
+    }}));
+    CHECK(!multi.add({"both", PeripheralClass::Bus, [](Mode) { return Finding{}; },
+                      [](Mode) { return std::vector<Finding>{}; }}));  // exactly one of the two
+    CHECK(!multi.add({"neither", PeripheralClass::Bus, nullptr, nullptr}));
+    multi.run(Mode::Full);
+    multi.run(Mode::Quick);  // keeps how the wiring was found
+    CHECK(scans == 2);
+    std::vector<Entry> rows = multi.entries();
+    CHECK(rows.size() == 2);
+    CHECK(rows[0].name == "imu" && rows[1].name == "i2c:0x76");
+    CHECK(rows[0].finding.source == "scan");
+    CHECK(multi.report_json().find("\"name\":\"imu\"") != std::string::npos);
+    // Found nothing: one row, so the report still shows it ran.
+    SelfCheck none;
+    none.add({"i2c", PeripheralClass::Bus, nullptr, [](Mode) { return std::vector<Finding>{}; }});
+    none.run(Mode::Quick);
+    CHECK(none.entries().size() == 1 && none.entries()[0].finding.verdict == Verdict::NotFound);
+
+    // A peripheral only a person can check.
+    SelfCheck human;
+    CHECK(human.add(make_human_confirmed_detector("speaker", "BCLK 42, WS 39, DOUT 41", "known_map",
+                                                  "speaker.beep", "Did you hear one short beep?")));
+    human.run(Mode::Quick);
+    std::vector<Entry> hr = human.entries();
+    CHECK(hr.size() == 1 && hr[0].klass == PeripheralClass::NoSignal);
+    CHECK(hr[0].finding.verdict == Verdict::Unverified);  // never ok
+    CHECK(human.report_json().find("\"confirm\":{\"capability\":\"speaker.beep\",\"question\":\"Did you hear one short beep?\"}") != std::string::npos);
+    CHECK(human.report_json().find("\"class\":\"no_signal\"") != std::string::npos);
+    // It does not degrade the device.
+    Endpoint ep3("dev3", "t", "Dev3");
+    attach_self_check(ep3, human);
+    CHECK(ep3.handle("GET", "/status", "").body.find("\"status\":\"ok\"") != std::string::npos);
 }
 
 static void test_scan_pins() {
@@ -627,6 +674,120 @@ static void test_scan_pins() {
     auto two = ordered_pairs({4, 5});
     CHECK(two.size() == 2 && two[0].first == 4 && two[0].second == 5 && two[1].first == 5 && two[1].second == 4);
     CHECK(ordered_pairs({7}).empty());
+    CHECK(!pin_claimed(4));
+    claim_pin(4);
+    CHECK(pin_claimed(4) && !pin_claimed(5));
+    release_pin(4);
+    CHECK(!pin_claimed(4));
+}
+
+// A fake I2C device: answers reads of the registers it was given, writes are recorded.
+struct FakeI2c {
+    uint8_t addr = 0;
+    std::vector<std::pair<uint16_t, uint8_t>> regs;
+    std::vector<std::pair<uint8_t, uint8_t>> writes;
+    dc_device::esp32::I2cAccess access() {
+        dc_device::esp32::I2cAccess io;
+        io.read = [this](uint8_t a, uint16_t reg, int, uint8_t* out) {
+            if (a != addr) return false;
+            for (auto& r : regs) if (r.first == reg) { *out = r.second; return true; }
+            return false;
+        };
+        io.write = [this](uint8_t a, uint8_t reg, uint8_t v) {
+            if (a != addr) return false;
+            writes.emplace_back(reg, v);
+            return true;
+        };
+        return io;
+    }
+};
+
+static void test_i2c_ids() {
+    using namespace dc_device::esp32;
+    FakeI2c cam{0x30, {{0x0A, 0x26}, {0x0B, 0x42}}, {}};
+    I2cIdentity id = identify_i2c(0x30, cam.access());
+    CHECK(id.confirmed && id.kind == "camera" && id.model == "ov2640");
+    CHECK_EQ(id.evidence, "ov2640, id 0x26 0x42 at 0x30");
+    CHECK(i2c_finding_name(id, 0x30) == "camera");
+    CHECK(cam.writes.size() == 1 && cam.writes[0].first == 0xFF && cam.writes[0].second == 0x01);
+
+    FakeI2c cam41{0x30, {{0x0A, 0x26}, {0x0B, 0x41}}, {}};
+    CHECK(identify_i2c(0x30, cam41.access()).model == "ov2640");
+
+    FakeI2c cam5{0x3C, {{0x300A, 0x56}, {0x300B, 0x40}}, {}};
+    CHECK(identify_i2c(0x3C, cam5.access()).model == "ov5640");
+
+    FakeI2c imu{0x68, {{0x75, 0x70}}, {}};  // MPU6500, not the first table row for 0x68
+    id = identify_i2c(0x68, imu.access());
+    CHECK(id.confirmed && id.model == "mpu6500" && i2c_finding_name(id, 0x68) == "imu@0x68");
+    CHECK(imu.writes.empty());  // identifying an IMU writes nothing
+
+    FakeI2c bme{0x76, {{0xD0, 0x60}}, {}};
+    CHECK(identify_i2c(0x76, bme.access()).model == "bme280");
+
+    FakeI2c codec{0x18, {{0xFD, 0x83}, {0xFE, 0x11}}, {}};
+    CHECK(identify_i2c(0x18, codec.access()).kind == "audio_codec");
+
+    // Something answers at 0x3C but it is not a camera: reported as a guess, not as fact.
+    FakeI2c oled{0x3C, {}, {}};
+    id = identify_i2c(0x3C, oled.access());
+    CHECK(!id.confirmed && id.kind == "i2c");
+    CHECK(id.evidence.find("chip not recognised") != std::string::npos);
+    CHECK(id.evidence.find("a guess from the address") != std::string::npos);
+    CHECK(i2c_finding_name(id, 0x3C) == "i2c@0x3c");
+
+    // A wrong id value is not accepted.
+    FakeI2c wrong{0x68, {{0x75, 0x99}}, {}};
+    CHECK(!identify_i2c(0x68, wrong.access()).confirmed);
+
+    // The OV2640 bank-select write is not done at an address the table does not list for it.
+    FakeI2c other{0x31, {}, {}};
+    CHECK(!identify_i2c(0x31, other.access()).confirmed);
+    CHECK(other.writes.empty());
+
+    size_t n = 0;
+    const uint8_t* addrs = i2c_discovery_addresses(&n);
+    CHECK(n > 10);
+    bool has30 = false;
+    for (size_t i = 0; i < n; ++i) { if (addrs[i] == 0x30) has30 = true; for (size_t j = i + 1; j < n; ++j) CHECK(addrs[i] != addrs[j]); }
+    CHECK(has30);
+}
+
+static void test_audio_analysis() {
+    using namespace dc_device::esp32;
+    const int rate = 16000, n = 4800;
+    std::vector<int32_t> v(n);
+
+    // Nothing driving the line: every sample the same.
+    for (auto& x : v) x = 0;
+    MicStats m = analyze_mic(v.data(), v.size());
+    CHECK(m.constant && !m.looks_like_mic);
+
+    // A floating data pin: random bits in every position, low byte included.
+    unsigned seed = 12345;
+    for (auto& x : v) { seed = seed * 1664525u + 1013904223u; x = static_cast<int32_t>(seed); }
+    m = analyze_mic(v.data(), v.size());
+    CHECK(!m.constant && !m.looks_like_mic && m.low_byte_zero < 0.1);
+
+    // A quiet microphone: small 24-bit values, left-justified, low byte zero.
+    seed = 7;
+    for (auto& x : v) { seed = seed * 1664525u + 1013904223u; x = static_cast<int32_t>(((seed >> 20) & 0x3FF) - 512) * 256; }
+    m = analyze_mic(v.data(), v.size());
+    CHECK(m.looks_like_mic && m.low_byte_zero > 0.99 && m.rms > 0 && m.rms < 0.01);
+
+    // The same plus a 1 kHz tone: the tone shows up at 1 kHz and not at 2.3 kHz.
+    const double kPi = 3.14159265358979323846;
+    std::vector<int32_t> quiet = v;
+    for (int i = 0; i < n; ++i) {
+        double tone = 0.05 * std::sin(2 * kPi * 1000.0 * i / rate);
+        v[i] = quiet[i] + static_cast<int32_t>(tone * 8388608.0) * 256;
+    }
+    double at1k = tone_power(v.data(), v.size(), rate, 1000.0);
+    double off = tone_power(v.data(), v.size(), rate, 2300.0);
+    double before = tone_power(quiet.data(), quiet.size(), rate, 1000.0);
+    CHECK(at1k > 100 * before);
+    CHECK(at1k > 100 * off);
+    CHECK(analyze_mic(nullptr, 0).samples == 0);
 }
 
 int main() {
@@ -643,6 +804,8 @@ int main() {
     test_chip_facts();
     test_selfcheck();
     test_scan_pins();
+    test_i2c_ids();
+    test_audio_analysis();
     if (g_failures == 0) {
         std::printf("all tests passed\n");
         return 0;

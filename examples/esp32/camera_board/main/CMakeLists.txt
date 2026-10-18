@@ -6,9 +6,13 @@ idf_component_register(
          "../../../../platforms/esp32/src/dc_device_chip.cpp"
          "../../../../platforms/esp32/src/dc_device_selfcheck.cpp"
          "../../../../platforms/esp32/src/dc_device_pins.cpp"
-         "../../../../platforms/esp32/src/dc_device_camera_detect.cpp"
+         "../../../../platforms/esp32/src/dc_device_i2c_ids.cpp"
+         "../../../../platforms/esp32/src/dc_device_i2c_detect.cpp"
+         "../../../../platforms/esp32/src/dc_device_pin_survey.cpp"
+         "../../../../platforms/esp32/src/dc_device_audio_analysis.cpp"
+         "../../../../platforms/esp32/src/dc_device_mic_detect.cpp"
          "../../../../platforms/esp32/src/dc_device_endpoint.cpp"
          "../../../../platforms/esp32/src/dc_device_http_server.cpp"
     INCLUDE_DIRS "../../../../platforms/esp32/include"
-    REQUIRES esp_http_server esp_event esp_netif esp_wifi nvs_flash driver freertos log spi_flash esp_hw_support esp_system
+    REQUIRES esp_http_server esp_event esp_netif esp_wifi nvs_flash driver freertos log spi_flash esp_hw_support esp_system esp_timer
 )

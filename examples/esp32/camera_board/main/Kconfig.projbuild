@@ -13,4 +13,11 @@ config DC_DEVICE_HTTP_PORT
     default 8787
     range 1 65535
 
+config DC_DEVICE_CAMERA_KNOWN_MAP
+    bool "Start from the known camera wiring (SDA 4, SCL 5)"
+    default y
+    help
+        Turn off to make the firmware find the camera by searching only,
+        which is how the scan is tested.
+
 endmenu

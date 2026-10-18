@@ -37,12 +37,30 @@ struct Finding {
     std::string evidence;  // what was seen, e.g. "chip id 0x2642 at 0x30"
     std::string wiring;    // what was found, e.g. "SDA 4, SCL 5"; empty if unknown
     std::string source;    // "known_map" or "scan"; empty if none
+    // Set only by a detector that reports several peripherals (run_many): each
+    // finding names itself and its class. Empty name = the detector's own name.
+    std::string name = "";
+    PeripheralClass klass = PeripheralClass::Bus;
+    // For a peripheral only a person can check: the capability that makes it do
+    // something visible or audible, and the question to put to the person after it.
+    // The device cannot know the answer; remembering it is the host's job.
+    std::string confirm_capability = "";
+    std::string confirm_question = "";
 };
 
 struct Detector {
     std::string name;  // unique, non-empty
     PeripheralClass klass = PeripheralClass::Bus;
-    std::function<Finding(Mode)> run;
+    std::function<Finding(Mode)> run = nullptr;  // one peripheral ...
+    // ... or several (a bus scan finds a variable number). Exactly one of the two.
+    std::function<std::vector<Finding>(Mode)> run_many = nullptr;
+};
+
+// One row of the report: a peripheral and what was observed.
+struct Entry {
+    std::string name;
+    PeripheralClass klass = PeripheralClass::Bus;
+    Finding finding;
 };
 
 const char* verdict_name(Verdict v);
@@ -50,8 +68,8 @@ const char* class_name(PeripheralClass c);
 
 class SelfCheck {
 public:
-    // Returns false (and registers nothing) for an empty or duplicate name or a
-    // missing run function.
+    // Returns false (and registers nothing) for an empty or duplicate name, or
+    // unless exactly one of run and run_many is set.
     bool add(Detector detector);
 
     // Runs every detector once and remembers the result.
@@ -62,16 +80,24 @@ public:
     std::string report_json() const;
 
     size_t size() const { return detectors_.size(); }
-    const std::vector<Finding>& findings() const { return findings_; }
-    const std::vector<Detector>& detectors() const { return detectors_; }
+    // Every peripheral reported so far, in detector order. Before the first run:
+    // one not_run row per detector.
+    std::vector<Entry> entries() const;
     bool ran() const { return ran_; }
 
 private:
     std::vector<Detector> detectors_;
-    std::vector<Finding> findings_;
+    std::vector<std::vector<Finding>> findings_;  // per detector
     bool ran_ = false;
     Mode last_mode_ = Mode::Quick;
 };
+
+// A peripheral nothing on the board can observe (a speaker, a screen): always
+// `unverified`, with the capability that exercises it and the question to ask a
+// person. `wiring` and `source` say where it is and where that came from; "known_map"
+// means taken from a table, not measured.
+Detector make_human_confirmed_detector(std::string name, std::string wiring, std::string source,
+                                       std::string capability, std::string question);
 
 // Registers three things on the endpoint:
 //   health check "peripherals"  - runs Quick; cheap

@@ -19,4 +19,10 @@ std::vector<int> safe_scan_pins(const std::string& chip_model);
 // Every ordered (first, second) pair of distinct pins from `pins`.
 std::vector<std::pair<int, int>> ordered_pairs(const std::vector<int>& pins);
 
+// Which pins a detector is holding open (an I2C bus keeps its two pins configured).
+// A detector that resets or reconfigures pins must leave the claimed ones alone.
+void claim_pin(int pin);
+void release_pin(int pin);
+bool pin_claimed(int pin);
+
 }  // namespace dc_device::esp32
