@@ -86,8 +86,8 @@ struct Response {
 // (docs/http-transport-v0.1.md). It maps (method, path, body) to a response,
 // so it can be unit-tested on a host and driven by any HTTP server.
 //
-// Not thread-safe: the caller must serialize handle() calls. ESP-IDF's
-// esp_http_server runs all handlers on a single task, which satisfies this.
+// Not thread-safe: the caller must serialize handle() and tick(). HttpServer
+// does this with one lock and calls tick() from its own watchdog task.
 class Endpoint {
 public:
     Endpoint(std::string id, std::string type, std::string name)

@@ -25,6 +25,7 @@
 #include "esp_heap_caps.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
@@ -199,6 +200,23 @@ static InvokeResult heap_read(const json::Value&) {
                                  std::to_string(esp_get_free_heap_size()) + "}");
 }
 
+// Test fixture for the safety watchdog (docs/safety-kernel-v0.1.md): "holds" a
+// pretend output for at most 2 s. Times come from the device's own clock so the
+// network does not enter into the measurement.
+static volatile bool g_held = false;
+static volatile int64_t g_held_at_us = 0;
+static volatile int64_t g_released_at_us = 0;
+static volatile int g_release_count = 0;
+
+static InvokeResult hold_state(const json::Value&) {
+    int64_t held = g_held_at_us;
+    int64_t released = g_released_at_us;
+    return InvokeResult::success(
+        std::string("{\"held\":") + (g_held ? "true" : "false") +
+        ",\"release_count\":" + std::to_string(g_release_count) +
+        ",\"held_for_ms\":" + std::to_string(released >= held ? (released - held) / 1000 : -1) + "}");
+}
+
 extern "C" void app_main() {
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
@@ -270,6 +288,41 @@ extern "C" void app_main() {
     };
     endpoint.add(trial);
 
+    // Registered first: the safe state must exist before a time-limited capability.
+    dc_device::esp32::CapabilitySpec release;
+    release.name = "debug.release";
+    release.description = "Test fixture: end the pretend output. This is the safe state.";
+    release.kind = "action";
+    release.parameters_json = R"({"type":"object","properties":{}})";
+    release.safety_json = R"({"emergency":true})";
+    release.handler = [](const json::Value&) {
+        g_released_at_us = esp_timer_get_time();
+        g_held = false;
+        g_release_count = g_release_count + 1;
+        return InvokeResult::success(R"({"released":true})");
+    };
+    endpoint.add(release);
+    endpoint.set_safe_state("debug.release");
+    dc_device::esp32::CapabilitySpec hold;
+    hold.name = "debug.hold";
+    hold.description = "Test fixture: start a pretend output that the device must end by itself after 2 s.";
+    hold.kind = "action";
+    hold.parameters_json = R"({"type":"object","properties":{}})";
+    hold.safety_json = R"({"motion":true,"max_duration_ms":2000})";
+    hold.handler = [](const json::Value&) {
+        g_held_at_us = esp_timer_get_time();
+        g_held = true;
+        return InvokeResult::success(R"({"held":true})");
+    };
+    endpoint.add(hold);
+    dc_device::esp32::CapabilitySpec hold_read;
+    hold_read.name = "debug.hold_state";
+    hold_read.description = "Test fixture: whether the pretend output is on, and how long the last one lasted.";
+    hold_read.kind = "sensor";
+    hold_read.parameters_json = R"({"type":"object","properties":{}})";
+    hold_read.handler = hold_state;
+    endpoint.add(hold_read);
+
     dc_device::esp32::CapabilitySpec heap;
     heap.name = "heap.read";
     heap.description = "Read the free heap size.";
@@ -326,5 +379,9 @@ extern "C" void app_main() {
     }
     dc_device::esp32::HttpServerConfig http;
     http.port = CONFIG_DC_DEVICE_HTTP_PORT;
+    if (!endpoint.validate_safety()) {
+        ESP_LOGE(TAG, "Time-limited capability without a safe state; HTTP server not started");
+        return;
+    }
     http_server.start(http);
 }

@@ -5,6 +5,9 @@
 #ifdef ESP_PLATFORM
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #endif
 
 namespace dc_device::esp32 {
@@ -14,6 +17,7 @@ namespace dc_device::esp32 {
 namespace {
 
 const char* TAG = "dc-device-http";
+constexpr uint32_t kTickStack = 4096;  // runs the safe-state handler
 constexpr int kMaxRecvTimeouts = 3;
 
 // httpd_resp_set_status() keeps the pointer until the response is sent, so
@@ -62,8 +66,30 @@ esp_err_t dispatch(httpd_req_t* req) {
     const char* method = req->method == HTTP_GET    ? "GET"
                          : req->method == HTTP_POST ? "POST"
                                                     : "";
+    // One request at a time, and never while the watchdog is acting.
+    auto lock = static_cast<SemaphoreHandle_t>(ctx->lock);
+    xSemaphoreTake(lock, portMAX_DELAY);
     Response response = ctx->endpoint->handle(method, req->uri, body);
+    xSemaphoreGive(lock);
     return send(req, response.status, response.body);
+}
+
+struct TickArgs {
+    HttpServer::Context* context;
+    uint32_t period_ms;
+};
+
+void tick_task(void* raw) {
+    auto* args = static_cast<TickArgs*>(raw);
+    auto lock = static_cast<SemaphoreHandle_t>(args->context->lock);
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(args->period_ms));
+        // A request in progress holds the lock; try again next period.
+        if (xSemaphoreTake(lock, pdMS_TO_TICKS(5)) != pdTRUE) continue;
+        bool acted = args->context->endpoint->tick();
+        xSemaphoreGive(lock);
+        if (acted) ESP_LOGW(TAG, "time limit passed: safe state ran");
+    }
 }
 
 }  // namespace
@@ -73,6 +99,10 @@ bool HttpServer::start(const HttpServerConfig& config) {
         return true;
     }
     context_.max_body_bytes = config.max_body_bytes;
+    if (context_.lock == nullptr) {
+        context_.lock = xSemaphoreCreateMutex();
+        if (context_.lock == nullptr) return false;
+    }
 
     httpd_config_t httpd_config = HTTPD_DEFAULT_CONFIG();
     httpd_config.server_port = config.port;
@@ -101,11 +131,27 @@ bool HttpServer::start(const HttpServerConfig& config) {
     }
 
     server_ = handle;
+    if (config.tick_period_ms > 0) {
+        static TickArgs args;  // one server per device
+        args = {&context_, config.tick_period_ms};
+        TaskHandle_t task = nullptr;
+        if (xTaskCreate(tick_task, "dc_tick", kTickStack, &args, 5, &task) != pdPASS) {
+            ESP_LOGE(TAG, "Failed to start the safety watchdog task");
+            httpd_stop(handle);
+            server_ = nullptr;
+            return false;
+        }
+        tick_task_ = task;
+    }
     ESP_LOGI(TAG, "dc-device HTTP server listening on port %u", config.port);
     return true;
 }
 
 void HttpServer::stop() {
+    if (tick_task_ != nullptr) {
+        vTaskDelete(static_cast<TaskHandle_t>(tick_task_));
+        tick_task_ = nullptr;
+    }
     if (server_ != nullptr) {
         httpd_stop(static_cast<httpd_handle_t>(server_));
         server_ = nullptr;
