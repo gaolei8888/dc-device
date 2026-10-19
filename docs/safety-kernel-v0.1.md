@@ -96,12 +96,16 @@ taken on the device's own clock):
 | Hold, then release by hand at 0.5 s | Released once; the watchdog did not fire again |
 | Hold, then a full self test starts | Safe state ran after **8390 ms**, about 6.4 s late |
 
-The last row is the limit: a request holds the mutex while it runs, so the watchdog
-waits for it. Any request that runs for seconds (a full self test takes about 8 s) stretches
-every time limit by that much, and a stop request waits too. Do not run a self test on a
-device with a moving part that is on. Closing this properly means refusing self tests
-while a time-limited capability is armed, or letting the watchdog run without the lock;
-both change behaviour and are not done.
+The last row was measured before the fix below. A request holds the mutex while it runs,
+so the watchdog waits for it; a full self test takes about 8 s and stretched the time
+limit by that much.
+
+**Fix: `POST /self_test` answers 409 `Busy` while a time-limited capability is running**
+(`Endpoint::time_limited_running()`, Python `Device.time_limited_running()`). On the
+third board: hold, then self test, gave 409 after 32 ms; `/status` stayed 200; after the
+hold timed out a self test ran normally. Other long requests are not covered: a capability
+handler that blocks for seconds still delays the watchdog and any stop request, so
+handlers of moving capabilities must return quickly.
 
 Timing is only as good as the tick period. A capability whose
 `max_duration_ms` is shorter than about twice the tick period is not

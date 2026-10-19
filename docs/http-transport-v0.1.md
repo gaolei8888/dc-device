@@ -22,6 +22,11 @@ Cheap device identification and the device-class profile reference. See
 Health reporting. See `health-contract-v0.1.md`. `/health` remains a pure
 liveness probe.
 
+`POST /self_test` answers 409 `Busy` while a capability with
+`safety.max_duration_ms` is running, because a self test can take seconds and
+would delay the watchdog that must stop it (`safety-kernel-v0.1.md`). Stop the
+capability, then retry. `/status` is not affected.
+
 ### POST /invoke
 
 Request:
