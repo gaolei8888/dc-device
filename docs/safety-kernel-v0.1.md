@@ -82,6 +82,15 @@ The kernel only acts when `tick()` is called.
   worst-case delay before the safe state runs is the longer of the tick period
   and any handler that is currently running.
 
+**Status on ESP32 (checked 2026-10-18):** nothing calls `Endpoint::tick()`. Not the
+HTTP server, not any example; only the host tests call it. A capability that declares
+`max_duration_ms` on an ESP32 therefore never falls back to its safe state. No shipped
+example declares one, so nothing is affected yet, but a moving device cannot rely on
+this rule until a tick task exists and has been measured on hardware. Nor is there a
+mutex: requests are handled one at a time because the IDF HTTP server runs them on a
+single task (not verified in this repository), so a stop request waits behind a
+handler that is still running.
+
 Timing is only as good as the tick period. A capability whose
 `max_duration_ms` is shorter than about twice the tick period is not
 meaningful.

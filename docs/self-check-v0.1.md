@@ -1,17 +1,21 @@
 # Self-check v0.1
 
-Status: draft. Implemented and run on two real ESP32-S3 boards of the same model:
+Status: draft. Implemented and run on three real ESP32-S3 boards of the same model:
 the chip facts, the detector framework, an I2C detector that finds the buses with
 no pin table (pairs among the pins something holds high first, then every safe
-pair) and identifies the chips it knows by id, and an input-only pin survey.
-Blind runs, 12 reboots, first self test after boot each time, under 1 s: board 1
-finds its camera (OV2640) on GPIO 4/5 and two unrecognised devices (0x40, 0x70) on
-GPIO 47/48; board 2 finds the same two on 47/48 and no camera. Not yet run on
-hardware: identification of any chip other than the camera (the table is tested
-only against fake devices), the microphone, the speaker loop, camera-as-observer,
-servo and motor tests, the `unverified` health state. The audio analysis code is
-written and host-tested; no I2S driver uses it yet. Host tests cover the
-framework, the pin table, the id table and the audio analysis.
+pair) and identifies the chips it knows by id, an input-only pin survey, and a
+blind microphone search that confirms a candidate by playing a tone on the speaker
+and listening for it. Blind runs: board 1 finds its camera (OV2640) on GPIO 4/5 and
+two unrecognised devices (0x40, 0x70) on GPIO 47/48 and no microphone; board 3
+finds the microphone (SCK 21, WS 40, SD 2) with no pin table and no camera; board 2
+was run only with the first detector versions and not with the final microphone
+search. A person was the observer for the speaker and the screen (boards 2 and 3; not
+board 1). The board 1 result matches what the owner says (no microphone fitted);
+the board 3 result matches the pins in its old program. Not yet run on hardware:
+identification of any chip other than the camera (the table is tested only against
+fake devices), servo and motor tests, camera-as-observer, the `unverified` health
+state on the wire. Host tests cover the framework, the pin table, the id table and
+the audio analysis; the I2S and GPIO code runs only on a board.
 
 ## Requirement
 
@@ -177,9 +181,10 @@ contract change and is not decided here.
   open once a device was found, and a timed-out probe ends the attempt.
 - Running a detector inside the HTTP task needs more than the default 4096-byte
   stack.
-- A scan that finds no device at all is reported as `not_found`, which degrades
-  `/status`. A board that has no I2C device would be degraded forever. Whether a
-  profile should say which peripherals are expected is open.
+- A scan that finds nothing is reported as `not_found`, which degrades `/status`.
+  Board 1 has no microphone and is therefore in the warning state for good, which is
+  a false alarm for the user. A board that has no I2C device is the same. The profile
+  would have to say which peripherals are expected; that is open.
 
 - The first scan after boot cost 8.5 s and ended at its time budget before reaching
   the pair that held a real bus. A bus needs pull-ups, so the scan now tries the
@@ -197,6 +202,40 @@ contract change and is not decided here.
   stack after the fifth one and caused a boot loop; the examples now set 8192.
 - Reading the report after a Quick run hides what the Full run said (a Quick run
   replaces the rows). A scan cut short by its budget was invisible this way.
+
+- **A detector needs a known positive.** The microphone search ran on three boards
+  and reported "not found" three times before anyone checked it against a board
+  that has a microphone. It could not have found one. The causes, found only once a
+  known microphone was available: (1) the candidate filter waited 1.5 ms after
+  starting the clocks, and the microphone sends nothing for the first tens of
+  milliseconds (0 edges at 1.5 ms, 80 to 130 edges at 20 ms or more); (2) the
+  judgement required the low 8 bits of every 32-bit word to be zero, and this
+  microphone's are not. Every detector must be run against a part that is there and a
+  part that is not before its "not found" is believed.
+- **The speaker and screen rows are not detections.** The camera example lists them
+  unconditionally, with pins taken from the board's old program, so they appear on
+  every board running it, including one with no speaker or screen. They are
+  `unverified` with a `confirm` question, which is honest about the verdict but not
+  about presence. Turning them into real detections needs a way to tell what board it
+  is, or an observer.
+- **A line that moves is not a part.** The microphone is accepted as working only if
+  it answers a known sound: a 880 Hz tone played on the speaker at the same time must
+  show up in the samples at least 8 times stronger than in a quiet read. Without a
+  way to play a sound the candidate is `unverified`, never `ok`. Cost: a full self
+  test on a board that has a microphone makes a one second sound. A board with no
+  candidate stays silent.
+- **Peak memory matters on a board without PSRAM.** The camera example has about
+  250 KB of heap. Reading two blocks of samples while the speaker task held a whole
+  tone in memory made `new` fail, and with exceptions off that is an `abort()`. The
+  samples are read in half-size blocks and the tone is written in chunks.
+- **The same board gave different I2C results on different days.** Board 3 found no
+  I2C device on its first run and found the pair at 0x40/0x70 on GPIO 47/48 on a
+  later one, with the pins that were held low no longer held low. The detector code
+  for I2C did not change between them. Whether something was connected or
+  disconnected in between is not known.
+- **A board dropped off the network once** (no ping, no HTTP) and rejoined at the
+  same address after a reset. Not explained; it may be the same thing as the single
+  empty replies noted in the test procedure.
 
 ## Open items
 

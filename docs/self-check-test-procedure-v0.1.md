@@ -1,7 +1,8 @@
 # Self-check test procedure v0.1
 
-Status: draft. This is the procedure that was actually run on two ESP32-S3 boards of
-the same model (the "first" and "second" board below) to test the self-check in
+Status: draft. This is the procedure that was actually run on three ESP32-S3 boards of
+the same model (the "first", "second" and "third" board below; the second was not
+re-run with the final microphone search) to test the self-check in
 `self-check-v0.1.md`. Every command was run on macOS with the ESP-IDF Docker image.
 Where the procedure says something was not tried, it was not.
 
@@ -47,9 +48,10 @@ tester) how it is wired, and separate three things that are easy to confuse:
    with `ioreg -p IOUSB -l -w0`. If no port appears, change the cable and the port.
 2. Read the chip: `esptool --port <port> chip-id` and `flash-id`. This resets the board
    and interrupts whatever it runs. Only do it when nothing connected to it can move.
-3. Expected for both boards: ESP32-S3 (QFN56) revision v0.2, 8 MB PSRAM, 16 MB quad
-   flash (manufacturer `ef`, device `4018`), 40 MHz crystal. They differ only in the
-   last byte of the MAC (`...67:40` and `...67:f0`).
+3. Expected for all three boards: ESP32-S3 (QFN56) revision v0.2, 8 MB PSRAM, 16 MB
+   quad flash (manufacturer `ef`, device `4018`), 40 MHz crystal. They differ only in
+   the last byte of the MAC (`...67:40`, `...67:f0`, `...67:18`). The camera example
+   does not enable the PSRAM, so only about 250 KB of heap is available.
 
 ## 2. Back up the flash (read-only)
 
@@ -148,20 +150,42 @@ the second run and wrong on the first is a bug (it happened twice).
 firmware on a board known to have the part. The camera on the first board was the
 control for the second: it was found by the same firmware.
 
-## 10. Microphone (blind search, then a trial on given pins)
+## 10. Microphone (blind search, confirmed by a tone)
 
-1. The self test searches pairs of floating pins: it drives a bit clock and a word
-   clock on a pair at the weakest drive strength while sampling the other floating pins
-   as inputs, then reads the pins that move as an I2S input and checks the samples. A
-   microphone sends clean 24-bit words; a floating pin sends random bits.
-2. It runs only in a full self test and carries on from where it stopped if its 8 s
-   budget ends. Two runs cover about 500 pairs.
-3. To separate "absent" from "not working", `debug.mic_try` (`sck`, `ws`, `sd`) reads
-   an I2S input on the given pins and returns the sample statistics and which other
-   floating pins move with the clock.
-4. Result on both boards: no microphone found, and none at the pins in the old
-   program. Reported `not_found`, not "absent": a microphone that needs an enable step
-   the firmware does not know cannot be told from a missing one.
+1. The self test searches pairs of floating pins. For each ordered pair the I2S
+   peripheral drives a bit clock and a word clock at the weakest drive strength, waits
+   25 ms (the microphone sends nothing for the first tens of milliseconds), and samples
+   the other floating pins as inputs. A pin with at least 4 edges is a candidate data
+   line. The candidate is read as an I2S input (Philips, 32 bits, 16 kHz).
+2. Level test: the line moves, and its varying part is between 0.00002 and 0.2 of
+   full scale. A floating pin gives random bits (about 0.29); a stuck line is constant.
+   This is necessary, not sufficient.
+3. Tone test: only for a candidate that passes the level test, the speaker plays 880 Hz
+   for about 1.1 s while the candidate is read again. The energy at 880 Hz must be at
+   least 8 times that of the quiet read. Then the verdict is `ok`. Without a speaker
+   stimulus, or with no response, it is `unverified`. **This makes the self test
+   audible on a board that has a microphone; tell the person first.**
+4. The search has an 8 s budget per run and carries on from where it stopped; about
+   500 pairs take two runs (a third finishes the walk).
+5. Reading by hand: `debug.mic_try` (`sck`, `ws`, `sd`, optional `format` philips or
+   msb, `bits` 16 or 32, `slot`, `rate_hz`, `settle_ms`) returns the level of each slot,
+   the first samples and the number of edges seen on every other floating pin. Ask the
+   person to speak, tell them when to start, and compare with a quiet read. A first
+   attempt without telling the person gave a wrong "does not respond" conclusion.
+6. **Control (do this before believing "not found"):** run the same firmware on a board
+   known to have a microphone and on one known not to.
+
+Result with the final detector: board 3 (has a microphone): found blind on the second
+run, SCK 21, WS 40, SD 2, `ok`, repeated on the next three runs; the pins equal those
+in its old program. Board 1 (owner: no microphone): `not_found` on 380 pairs, and a
+direct read on the old program's pins shows a constant line. The numbers measured on
+board 3: with 0 to 1.5 ms before sampling the data line shows no edge; with 20 ms or
+more it shows 80 to 130. Between 2 and 14 ms was tried and showed none (the delay is
+rounded to system ticks above 10 ms, so the exact threshold between 10 and 20 ms was
+not found). Board 2 was not re-run.
+
+What this does not show: that a microphone of another type (PDM, analogue, one that
+needs enabling, one on the right slot) is found. Only two samples exist.
 
 ## 11. Speaker and screen (a person is the observer)
 
@@ -172,8 +196,9 @@ Neither can be observed by the board. Tell the person before each test.
 3. Ask what was heard and seen, including whether the colours were right (red shown as
    blue means the colour order is wrong) and whether the picture was clean.
 4. Record the answer as **human-confirmed**. The device does not know the answer and
-   reports these as unverified. Both were confirmed on the second board; the colour
-   order was not separately checked.
+   reports these as unverified. Both were confirmed on the second and on the third
+   board; the colour order was checked on the third (red, green, blue, black as asked,
+   clean picture) and not on the second.
 5. Pins come from the old program, so these two are not blind.
 6. The self test now lists both as `unverified`, with the wiring and its source
    (`known_map`, meaning taken from a table) and a `confirm` object: the capability to
@@ -209,6 +234,14 @@ a person saw.
 - Several first runs after boot gave a different answer from later runs. Causes found:
   a scan budget that ended before the bus was reached, pins reset by one detector that
   another detector needed, and a bus built and torn down on every status call.
+- A heap of 250 KB runs out when a detector holds several sample buffers while another
+  task holds a whole tone. `new` failing is an `abort()` because exceptions are off.
+  The backtrace decoded to a `push_back` in the sample read. Keep peak use low; read in
+  chunks.
+- A board can go silent on the network (no ping, no HTTP) without crashing and rejoin
+  after a reset. Seen once on board 3, cause unknown.
+- A hand test that needs a person (speaking, listening) must start only after the
+  person has been told. Running it first and asking afterwards produced a wrong result.
 - The HTTP task stack of 4096 bytes overflowed inside a driver call; it is now 8192.
 - The main task (where `app_main` runs) has 3584 bytes by default. Registering two
   more detectors there overflowed it and the board rebooted in a loop, each boot
@@ -225,9 +258,12 @@ a person saw.
 
 - Chips other than the camera sensor: the id table is tested only against fake
   devices, because no board had another identifiable chip.
-- What the two devices at 0x40 and 0x70 are.
+- What the two devices at 0x40 and 0x70 are, and why board 3 showed none on one day
+  and the pair on another.
+- Microphones other than the one on board 3.
 - Servos and motors (no board had any connected; the way a moving self test is
   requested is undecided).
-- A microphone that needs enabling, a speaker or screen with no person present, and
-  the camera as an observer.
+- A speaker or screen with no person present, and the camera as an observer. (The
+  speaker is used as a sound source for the microphone, which is a different thing
+  from checking the speaker itself.)
 - Boards of another model, and chips other than the ESP32-S3.
