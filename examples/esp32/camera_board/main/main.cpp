@@ -4,6 +4,7 @@
 // which pins they are on. /status re-checks the
 // known or cached wiring; POST /self_test may search for it. Nothing here drives
 // a data line or takes a frame.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -62,13 +63,17 @@ bool beep(int freq_hz, int ms, int amplitude) {
         i2s_del_channel(tx);
         return false;
     }
+    // Written in chunks: the whole tone in one buffer (35 KB for a second) ran the heap out.
     const int samples = 16000 * ms / 1000;
-    std::vector<int16_t> buf(samples);
-    for (int i = 0; i < samples; ++i) {
-        buf[i] = static_cast<int16_t>(amplitude * std::sin(2.0 * 3.14159265 * freq_hz * i / 16000.0));
-    }
+    std::vector<int16_t> buf(1600);
     size_t written = 0;
-    i2s_channel_write(tx, buf.data(), buf.size() * sizeof(int16_t), &written, 2000);
+    for (int done = 0; done < samples; done += static_cast<int>(buf.size())) {
+        int n = std::min<int>(buf.size(), samples - done);
+        for (int i = 0; i < n; ++i) {
+            buf[i] = static_cast<int16_t>(amplitude * std::sin(2.0 * 3.14159265 * freq_hz * (done + i) / 16000.0));
+        }
+        i2s_channel_write(tx, buf.data(), n * sizeof(int16_t), &written, 2000);
+    }
     std::vector<int16_t> silence(3200, 0);  // let the amplifier settle, no click
     i2s_channel_write(tx, silence.data(), silence.size() * sizeof(int16_t), &written, 1000);
     i2s_channel_disable(tx);
@@ -230,7 +235,9 @@ extern "C" void app_main() {
     trial.description = "Debug: read an I2S microphone on the given pins and report the samples.";
     trial.kind = "sensor";
     trial.parameters_json =
-        R"({"type":"object","properties":{"sck":{"type":"integer"},"ws":{"type":"integer"},"sd":{"type":"integer"}},"required":["sck","ws","sd"]})";
+        R"({"type":"object","properties":{"sck":{"type":"integer"},"ws":{"type":"integer"},"sd":{"type":"integer"},)"
+        R"("format":{"type":"string","enum":["philips","msb"]},"bits":{"type":"integer","enum":[16,32]},)"
+        R"("slot":{"type":"string","enum":["auto","left","right"]},"rate_hz":{"type":"integer"},"settle_ms":{"type":"integer"}},"required":["sck","ws","sd"]})";
     trial.handler = [](const json::Value& a) {
         int sck = static_cast<int>(a.find("sck")->number), ws = static_cast<int>(a.find("ws")->number),
             sd = static_cast<int>(a.find("sd")->number);
@@ -238,15 +245,27 @@ extern "C" void app_main() {
         for (int p : dc_device::esp32::pins_floating()) {
             if (p != sck && p != ws) others.push_back(p);
         }
-        dc_device::esp32::MicTrial t = dc_device::esp32::try_mic(sck, ws, sd, others);
+        dc_device::esp32::MicFormat fmt;
+        if (const json::Value* v = a.find("format")) fmt.msb = v->string == "msb";
+        if (const json::Value* v = a.find("bits")) fmt.bits = static_cast<int>(v->number) == 16 ? 16 : 32;
+        if (const json::Value* v = a.find("slot")) fmt.slot = v->string == "left" ? 1 : v->string == "right" ? 2 : 0;
+        if (const json::Value* v = a.find("rate_hz")) fmt.rate_hz = static_cast<int>(v->number);
+        if (const json::Value* v = a.find("settle_ms")) fmt.settle_ms = static_cast<int>(v->number);
+        dc_device::esp32::MicTrial t = dc_device::esp32::try_mic(sck, ws, sd, others, fmt);
+        std::string preview;
+        for (int32_t w : t.preview) preview += (preview.empty() ? "" : ",") + std::to_string(w >> 8);
         std::string moving;
         for (int p : t.moving_pins) moving += (moving.empty() ? "" : ",") + std::to_string(p);
-        char buf[320];
+        std::string edges;
+        for (auto& pc : t.transitions) edges += (edges.empty() ? "" : ",") + std::string("\"") + std::to_string(pc.first) + "\":" + std::to_string(pc.second);
+        char buf[900];
         snprintf(buf, sizeof(buf),
                  "{\"read_ok\":%s,\"samples\":%u,\"constant\":%s,\"rms\":%.5f,\"low_byte_zero\":%.3f,"
-                 "\"looks_like_mic\":%s,\"moving_pins\":[%s]}",
+                 "\"looks_like_mic\":%s,\"left_ac_rms\":%.5f,\"right_ac_rms\":%.5f,"
+                 "\"preview\":[%s],\"moving_pins\":[%s],\"transitions\":{%s}}",
                  t.read_ok ? "true" : "false", static_cast<unsigned>(t.samples), t.constant ? "true" : "false", t.rms,
-                 t.low_byte_zero, t.looks_like_mic ? "true" : "false", moving.c_str());
+                 t.low_byte_zero, t.looks_like_mic ? "true" : "false", t.left_ac_rms, t.right_ac_rms,
+                 preview.c_str(), moving.c_str(), edges.c_str());
         return InvokeResult::success(buf);
     };
     endpoint.add(trial);
@@ -266,7 +285,11 @@ extern "C" void app_main() {
     self_check.add(dc_device::esp32::make_i2c_detector({}));
 #endif
     self_check.add(dc_device::esp32::make_pin_survey_detector());
-    self_check.add(dc_device::esp32::make_mic_detector());
+    // The speaker is the sound source that tells a microphone from a pin that just moves.
+    // This makes a self test audible on a board that has a microphone.
+    dc_device::esp32::MicStimulus stimulus;
+    stimulus.play = [](int hz, int ms) { beep(hz, ms, 2000); };
+    self_check.add(dc_device::esp32::make_mic_detector(stimulus));
     // Nothing on the board can observe these two. The pins are from the board's old
     // program, not measured.
     self_check.add(dc_device::esp32::make_human_confirmed_detector(

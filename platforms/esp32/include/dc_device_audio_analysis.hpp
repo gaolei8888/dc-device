@@ -20,6 +20,25 @@ struct MicStats {
 
 MicStats analyze_mic(const int32_t* samples, size_t n);
 
+// What the varying part of a block of samples looks like, whatever the word format.
+struct SignalStats {
+    size_t samples = 0;
+    bool constant = false;  // every sample identical
+    double ac_rms = 0;      // of the signal with its mean removed, fraction of full scale (0..1)
+};
+SignalStats signal_stats(const int32_t* samples, size_t n);
+
+// A level a microphone can have: the line moves, but nowhere near the full-scale
+// noise of a floating pin (random bits give about 0.29) or a clock picked up by
+// crosstalk. This is a necessary condition, not proof: only a response to a known
+// sound is (tone_gain).
+bool plausible_mic_level(const SignalStats& s);
+
+// How much stronger the signal at `freq_hz` is in `loud` than in `quiet`. About 1
+// when the tone made no difference.
+double tone_gain(const int32_t* quiet, size_t nq, const int32_t* loud, size_t nl, int sample_rate_hz,
+                 double freq_hz);
+
 // Power of the signal at `freq_hz` (Goertzel), as a fraction of full scale squared.
 double tone_power(const int32_t* samples, size_t n, int sample_rate_hz, double freq_hz);
 

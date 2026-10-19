@@ -24,6 +24,39 @@ MicStats analyze_mic(const int32_t* samples, size_t n) {
     return s;
 }
 
+SignalStats signal_stats(const int32_t* samples, size_t n) {
+    SignalStats s;
+    s.samples = n;
+    if (n == 0) return s;
+    bool same = true;
+    double mean = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (samples[i] != samples[0]) same = false;
+        mean += static_cast<double>(samples[i]);
+    }
+    mean /= static_cast<double>(n);
+    double sum_sq = 0;
+    for (size_t i = 0; i < n; ++i) {
+        double d = static_cast<double>(samples[i]) - mean;
+        sum_sq += d * d;
+    }
+    s.constant = same;
+    s.ac_rms = std::sqrt(sum_sq / static_cast<double>(n)) / 2147483648.0;
+    return s;
+}
+
+bool plausible_mic_level(const SignalStats& s) {
+    return s.samples > 0 && !s.constant && s.ac_rms >= 2e-5 && s.ac_rms <= 0.2;
+}
+
+double tone_gain(const int32_t* quiet, size_t nq, const int32_t* loud, size_t nl, int sample_rate_hz,
+                 double freq_hz) {
+    const double kFloor = 1e-13;  // below any real microphone's noise
+    double pq = tone_power(quiet, nq, sample_rate_hz, freq_hz);
+    double pl = tone_power(loud, nl, sample_rate_hz, freq_hz);
+    return (pl + kFloor) / (pq + kFloor);
+}
+
 double tone_power(const int32_t* samples, size_t n, int sample_rate_hz, double freq_hz) {
     if (n == 0) return 0;
     const double kPi = 3.14159265358979323846;

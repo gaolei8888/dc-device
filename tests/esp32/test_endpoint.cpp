@@ -788,6 +788,31 @@ static void test_audio_analysis() {
     CHECK(at1k > 100 * before);
     CHECK(at1k > 100 * off);
     CHECK(analyze_mic(nullptr, 0).samples == 0);
+
+    // The level test: a microphone passes, a floating pin and a stuck line do not.
+    // The real board's samples had a non-zero low byte, which analyze_mic rejects.
+    std::vector<int32_t> real(n);
+    seed = 99;
+    for (auto& x : real) { seed = seed * 1664525u + 1013904223u; x = (static_cast<int32_t>((seed >> 20) & 0xFFF) - 2048) * 1000; }
+    CHECK(!analyze_mic(real.data(), real.size()).looks_like_mic);
+    CHECK(plausible_mic_level(signal_stats(real.data(), real.size())));
+    std::vector<int32_t> noise(n);
+    seed = 5;
+    for (auto& x : noise) { seed = seed * 1664525u + 1013904223u; x = static_cast<int32_t>(seed); }
+    CHECK(!plausible_mic_level(signal_stats(noise.data(), noise.size())));
+    std::vector<int32_t> stuck(n, 123456);
+    CHECK(!plausible_mic_level(signal_stats(stuck.data(), stuck.size())));
+    CHECK(!plausible_mic_level(signal_stats(nullptr, 0)));
+
+    // A response to a known tone separates a microphone from a pin that just moves.
+    std::vector<int32_t> heard = real;
+    for (int i = 0; i < n; ++i) heard[i] = real[i] + static_cast<int32_t>(0.02 * std::sin(2 * kPi * 880.0 * i / rate) * 2147483647.0);
+    CHECK(tone_gain(real.data(), n, heard.data(), n, rate, 880.0) > 50);
+    // The same line read twice with no tone: no gain.
+    std::vector<int32_t> again(n);
+    seed = 1234;
+    for (auto& x : again) { seed = seed * 1664525u + 1013904223u; x = (static_cast<int32_t>((seed >> 20) & 0xFFF) - 2048) * 1000; }
+    CHECK(tone_gain(real.data(), n, again.data(), n, rate, 880.0) < 3);
 }
 
 int main() {
