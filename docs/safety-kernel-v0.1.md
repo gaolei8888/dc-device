@@ -82,14 +82,26 @@ The kernel only acts when `tick()` is called.
   worst-case delay before the safe state runs is the longer of the tick period
   and any handler that is currently running.
 
-**Status on ESP32 (checked 2026-10-18):** nothing calls `Endpoint::tick()`. Not the
-HTTP server, not any example; only the host tests call it. A capability that declares
-`max_duration_ms` on an ESP32 therefore never falls back to its safe state. No shipped
-example declares one, so nothing is affected yet, but a moving device cannot rely on
-this rule until a tick task exists and has been measured on hardware. Nor is there a
-mutex: requests are handled one at a time because the IDF HTTP server runs them on a
-single task (not verified in this repository), so a stop request waits behind a
-handler that is still running.
+**Status on ESP32 (2026-10-18):** `HttpServer` owns one mutex around `handle()` and runs a
+`dc_tick` task that calls `Endpoint::tick()` every `tick_period_ms` (default 50). Before
+this change nothing called `tick()`.
+
+Measured on the third board with the `debug.hold` test fixture in
+`examples/esp32/camera_board` (`max_duration_ms` 2000, safe state `debug.release`, times
+taken on the device's own clock):
+
+| Case | Result |
+|---|---|
+| Hold, send nothing | Safe state ran after 2014 to 2042 ms (6 runs): 14 to 42 ms late |
+| Hold, then release by hand at 0.5 s | Released once; the watchdog did not fire again |
+| Hold, then a full self test starts | Safe state ran after **8390 ms**, about 6.4 s late |
+
+The last row is the limit: a request holds the mutex while it runs, so the watchdog
+waits for it. Any request that runs for seconds (a full self test takes about 8 s) stretches
+every time limit by that much, and a stop request waits too. Do not run a self test on a
+device with a moving part that is on. Closing this properly means refusing self tests
+while a time-limited capability is armed, or letting the watchdog run without the lock;
+both change behaviour and are not done.
 
 Timing is only as good as the tick period. A capability whose
 `max_duration_ms` is shorter than about twice the tick period is not
