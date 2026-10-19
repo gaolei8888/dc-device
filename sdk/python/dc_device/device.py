@@ -11,6 +11,9 @@ CheckState = Literal["ok", "warning", "failed", "skipped"]
 class ValidationError(ValueError):
     pass
 
+class Busy(RuntimeError):
+    """A self test was requested while a time-limited capability is running."""
+
 class RateLimited(RuntimeError):
     """The capability was invoked faster than its safety.max_rate_hz allows."""
 
@@ -333,7 +336,16 @@ class Device:
     def get_status(self) -> Dict[str, Any]:
         return self._report(self.health_checks)
 
+    def time_limited_running(self) -> bool:
+        """True while a capability with max_duration_ms is running."""
+        with self._kernel_lock:
+            return bool(self._deadlines)
+
     def self_test(self) -> Dict[str, Any]:
+        # A self test can take seconds and may drive pins; do not run it over a
+        # capability the watchdog is meant to stop on time.
+        if self.time_limited_running():
+            raise Busy("A time-limited capability is running; stop it before a self test")
         # Serialized: two concurrent self-tests must not drive hardware at once.
         with self._self_test_lock:
             report = self._report({**self.health_checks, **self.self_tests})

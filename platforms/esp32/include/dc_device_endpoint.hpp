@@ -122,6 +122,11 @@ public:
     // called from the same task as handle() or under the caller's own lock.
     bool tick();
 
+    // True while a capability with max_duration_ms is running. POST /self_test
+    // answers 409 Busy then, because a self test holds the endpoint for seconds
+    // and the watchdog could not stop the capability in time.
+    bool time_limited_running() const;
+
     // Replaces the monotonic clock (seconds) used for safety.max_rate_hz.
     // For tests; the default is std::chrono::steady_clock.
     void set_clock(std::function<double()> clock) { clock_ = std::move(clock); }

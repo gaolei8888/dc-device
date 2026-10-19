@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
-from .device import Device, RateLimited
+from .device import Busy, Device, RateLimited
 
 
 class DeviceRequestHandler(BaseHTTPRequestHandler):
@@ -59,7 +59,10 @@ class DeviceRequestHandler(BaseHTTPRequestHandler):
 
         path = urlparse(self.path).path
         if path == "/self_test":
-            self._send_json(200, self.device.self_test())
+            try:
+                self._send_json(200, self.device.self_test())
+            except Busy as exc:
+                self._send_json(409, {"ok": False, "error": "Busy", "message": str(exc)})
             return
         if path != "/invoke":
             self._send_json(404, {"error": "not_found"})

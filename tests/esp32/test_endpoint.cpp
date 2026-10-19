@@ -357,7 +357,14 @@ static void test_safety_kernel() {
     CHECK(!ep.tick());
 
     ep.handle("POST", "/invoke", move);
+    CHECK(ep.time_limited_running());
+    // A self test would hold the endpoint past the time limit, so it is refused.
+    Response busy = ep.handle("POST", "/self_test", "");
+    CHECK(busy.status == 409);
+    CHECK(busy.body.find("\"Busy\"") != std::string::npos);
     ep.handle("POST", "/invoke", R"({"capability":"stop"})");
+    CHECK(!ep.time_limited_running());
+    CHECK(ep.handle("POST", "/self_test", "").status == 200);
     now = 9.0;
     CHECK(!ep.tick());  // stopping by hand disarms
 }

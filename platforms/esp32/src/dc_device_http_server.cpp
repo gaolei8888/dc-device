@@ -27,6 +27,7 @@ const char* status_line(int status) {
         case 200: return "200 OK";
         case 400: return "400 Bad Request";
         case 404: return "404 Not Found";
+        case 409: return "409 Conflict";
         case 413: return "413 Payload Too Large";
         default:  return "500 Internal Server Error";
     }

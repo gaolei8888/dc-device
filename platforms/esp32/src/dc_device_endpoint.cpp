@@ -225,6 +225,13 @@ bool Endpoint::tick() {
     return true;
 }
 
+bool Endpoint::time_limited_running() const {
+    for (const auto& r : rates_) {
+        if (r.armed) return true;
+    }
+    return false;
+}
+
 bool Endpoint::set_identity(Identity identity) {
     bool has_id = !identity.profile_id.empty();
     bool has_version = !identity.profile_version.empty();
@@ -446,6 +453,10 @@ Response Endpoint::handle(const std::string& method,
         return {200, diagnostics()};
     }
     if (method == "POST" && path == "/self_test") {
+        if (time_limited_running()) {
+            return error_response(409, "Busy",
+                                  "A time-limited capability is running; stop it before a self test");
+        }
         return {200, self_test()};
     }
     if (method == "POST" && path == "/invoke") {

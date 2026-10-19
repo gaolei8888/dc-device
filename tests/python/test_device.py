@@ -163,3 +163,21 @@ def test_manifest_declares_safety_kernel_and_validates():
     with pytest.raises(ValueError):
         bare.register(Capability("bad2", "d", "action", lambda: None,
                                  safety={"max_duration_ms": 5, "emergency": True}))
+
+
+def test_self_test_is_refused_while_a_time_limited_capability_runs():
+    import pytest
+    from dc_device.device import Busy
+
+    device, now, log = _kernel_device()
+    device.invoke("move")
+    assert device.time_limited_running()
+    with pytest.raises(Busy):
+        device.self_test()
+    device.invoke("stop")
+    assert not device.time_limited_running()
+    assert device.self_test()["status"] == "ok"
+    device.invoke("move")
+    now[0] = 0.6
+    device.tick()  # timed out on its own: self test allowed again
+    assert device.self_test()["status"] == "ok"
