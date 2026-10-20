@@ -89,7 +89,9 @@ A self-check report says, per peripheral, one of:
 - `failed`: expected and not found, or found and misbehaving.
 - `unverified`: present as far as the device knows, but not observable.
 - `not_found`: a known class A or B peripheral that was looked for and is absent.
-  Not an error by itself; whether it matters is the profile's call.
+  Not an error by itself; whether it matters depends on whether the detector is
+  `required` (default; degrades `/status`) or optional (reported with
+  `"optional":true`, no effect on status).
 
 The report includes the wiring that was found and how (`known_map` or `scan`), so
 a host can show it and a developer can add it to the known maps.
@@ -181,10 +183,19 @@ contract change and is not decided here.
   open once a device was found, and a timed-out probe ends the attempt.
 - Running a detector inside the HTTP task needs more than the default 4096-byte
   stack.
-- A scan that finds nothing is reported as `not_found`, which degrades `/status`.
-  Board 1 has no microphone and is therefore in the warning state for good, which is
-  a false alarm for the user. A board that has no I2C device is the same. The profile
-  would have to say which peripherals are expected; that is open.
+- A scan that finds nothing is reported as `not_found`. That used to degrade `/status`,
+  so board 1 (no microphone) sat in the warning state for good, a false alarm. Now a
+  detector can be `required = false`: `not_found` is still reported, marked
+  `"optional":true`, and does not degrade the device. The camera board example marks
+  its searching detectors (I2C, pin survey, microphone) optional. Checked on boards 1
+  and 3: `/status` is `ok` before any self test and after the mic search ends in
+  `not_found` (board 1) or `ok` (board 3). The device still cannot know which parts a
+  board should have; the host, which is told by the owner, compares the report with
+  that. Detectors default to required, so other firmware keeps the old behaviour.
+- The other half: a part that answered earlier in this boot and is silent in a later
+  `/status` run is `failed` ("answered earlier, now silent"), optional or not. Without
+  it, making a part optional would hide a microphone that died. Only Quick runs judge
+  this; a Full run is a search that may be cut short. The memory is lost on reboot.
 
 - The first scan after boot cost 8.5 s and ended at its time budget before reaching
   the pair that held a real bus. A bus needs pull-ups, so the scan now tries the
