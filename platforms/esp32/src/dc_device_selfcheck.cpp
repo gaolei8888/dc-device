@@ -33,6 +33,7 @@ bool SelfCheck::add(Detector detector) {
     }
     detectors_.push_back(std::move(detector));
     findings_.emplace_back(1);  // one not_run placeholder
+    seen_ok_.emplace_back();
     return true;
 }
 
@@ -44,6 +45,7 @@ std::vector<Entry> SelfCheck::entries() const {
             e.name = f.name.empty() ? detectors_[i].name : f.name;
             e.klass = f.name.empty() ? detectors_[i].klass : f.klass;
             e.finding = f;
+            e.required = detectors_[i].required;
             out.push_back(std::move(e));
         }
     }
@@ -69,6 +71,28 @@ void SelfCheck::run(Mode mode) {
                     if (f.source.empty()) f.source = old.source;
                 }
             }
+        }
+        // Something that answered earlier and is silent now is a fault, not an
+        // absent part. Only Quick runs re-check known wiring, so only they judge.
+        if (mode == Mode::Quick) {
+            for (Finding& f : fresh) {
+                if (f.verdict == Verdict::NotFound && seen_ok_[i].count(f.name) != 0) {
+                    f.verdict = Verdict::Failed;
+                    f.evidence = "answered earlier, now silent (" + f.evidence + ")";
+                }
+            }
+            for (const auto& seen : seen_ok_[i]) {
+                bool present = false;
+                for (const Finding& f : fresh) present = present || f.name == seen.first;
+                if (present) continue;
+                Finding gone = seen.second;
+                gone.verdict = Verdict::Failed;
+                gone.evidence = "answered earlier, now silent";
+                fresh.push_back(std::move(gone));
+            }
+        }
+        for (const Finding& f : fresh) {
+            if (f.verdict == Verdict::Ok) seen_ok_[i][f.name] = f;
         }
         findings_[i] = std::move(fresh);
         // A multi-peripheral detector that found nothing still leaves a row, so
@@ -99,6 +123,7 @@ std::string SelfCheck::report_json() const {
         out += ",\"evidence\":" + json::quote(f.evidence);
         out += ",\"wiring\":" + json::quote(f.wiring);
         out += ",\"source\":" + json::quote(f.source);
+        if (!e.required) out += ",\"optional\":true";
         if (!f.confirm_capability.empty()) {
             out += ",\"confirm\":{\"capability\":" + json::quote(f.confirm_capability) +
                    ",\"question\":" + json::quote(f.confirm_question) + "}";
@@ -135,7 +160,7 @@ static CheckResult aggregate(const SelfCheck& check) {
         std::string item = e.name + (f.evidence.empty() ? "" : " (" + f.evidence + ")");
         if (f.verdict == Verdict::Failed) {
             failed += (failed.empty() ? "" : "; ") + item;
-        } else if (f.verdict == Verdict::NotFound) {
+        } else if (f.verdict == Verdict::NotFound && e.required) {
             missing += (missing.empty() ? "" : "; ") + item;
         }
     }

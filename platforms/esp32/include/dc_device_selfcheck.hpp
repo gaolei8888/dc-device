@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -54,6 +55,11 @@ struct Detector {
     std::function<Finding(Mode)> run = nullptr;  // one peripheral ...
     // ... or several (a bus scan finds a variable number). Exactly one of the two.
     std::function<std::vector<Finding>(Mode)> run_many = nullptr;
+    // false = the part may legitimately be absent (a microphone on a board that has
+    // none): not_found is reported but does not degrade /status. The device cannot
+    // know which parts a given board should have; the host that owns that
+    // knowledge compares the report with it. Always last, so brace init still works.
+    bool required = true;
 };
 
 // One row of the report: a peripheral and what was observed.
@@ -61,6 +67,7 @@ struct Entry {
     std::string name;
     PeripheralClass klass = PeripheralClass::Bus;
     Finding finding;
+    bool required = true;
 };
 
 const char* verdict_name(Verdict v);
@@ -76,7 +83,7 @@ public:
     void run(Mode mode);
 
     // {"ran":bool,"mode":"quick"|"full","peripherals":[{name,class,verdict,
-    // evidence,wiring,source}]}. Before the first run every verdict is not_run.
+    // evidence,wiring,source[,"optional":true]}]}. Before the first run every verdict is not_run.
     std::string report_json() const;
 
     size_t size() const { return detectors_.size(); }
@@ -88,6 +95,8 @@ public:
 private:
     std::vector<Detector> detectors_;
     std::vector<std::vector<Finding>> findings_;  // per detector
+    // Per detector: peripherals seen working since boot, with their last good row.
+    std::vector<std::map<std::string, Finding>> seen_ok_;
     bool ran_ = false;
     Mode last_mode_ = Mode::Quick;
 };
@@ -105,7 +114,9 @@ Detector make_human_confirmed_detector(std::string name, std::string wiring, std
 //   diagnostic   "peripherals"  - the last report, with evidence and wiring
 // `check` must outlive the endpoint.
 //
-// Aggregate state: any Failed -> failed; else any NotFound -> warning; else ok.
+// Aggregate state: any Failed -> failed; else any NotFound of a required detector ->
+// warning; else ok. A part that answered earlier in this boot and no longer does is
+// Failed (Quick runs), whether or not it is required.
 // Unverified does not degrade the device (a device with an LED would otherwise
 // never be healthy); the per-peripheral verdict is in the diagnostic. The
 // contract has no state for it yet (docs/self-check-v0.1.md, open items).

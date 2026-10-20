@@ -331,18 +331,24 @@ extern "C" void app_main() {
     heap.handler = heap_read;
     endpoint.add(heap);
 
+    // This firmware runs on boards with different parts, so a search that finds
+    // nothing is information, not a fault. The host knows what each board should have.
+    auto optional = [](dc_device::esp32::Detector d) {
+        d.required = false;
+        return d;
+    };
     // A known map is only a starting point: it is checked by reading the sensor.
     #if CONFIG_DC_DEVICE_CAMERA_KNOWN_MAP
-    self_check.add(dc_device::esp32::make_i2c_detector({{4, 5}}));
+    self_check.add(optional(dc_device::esp32::make_i2c_detector({{4, 5}})));
 #else
-    self_check.add(dc_device::esp32::make_i2c_detector({}));
+    self_check.add(optional(dc_device::esp32::make_i2c_detector({})));
 #endif
-    self_check.add(dc_device::esp32::make_pin_survey_detector());
+    self_check.add(optional(dc_device::esp32::make_pin_survey_detector()));
     // The speaker is the sound source that tells a microphone from a pin that just moves.
     // This makes a self test audible on a board that has a microphone.
     dc_device::esp32::MicStimulus stimulus;
     stimulus.play = [](int hz, int ms) { beep(hz, ms, 2000); };
-    self_check.add(dc_device::esp32::make_mic_detector(stimulus));
+    self_check.add(optional(dc_device::esp32::make_mic_detector(stimulus)));
     // Nothing on the board can observe these two. The pins are from the board's old
     // program, not measured.
     self_check.add(dc_device::esp32::make_human_confirmed_detector(

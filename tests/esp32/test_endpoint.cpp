@@ -652,6 +652,67 @@ static void test_selfcheck() {
     none.run(Mode::Quick);
     CHECK(none.entries().size() == 1 && none.entries()[0].finding.verdict == Verdict::NotFound);
 
+    // A part that may be absent: not_found is reported, marked optional, and does not
+    // degrade the device.
+    {
+        SelfCheck opt;
+        Detector mic{"mic", PeripheralClass::Signal,
+                     [](Mode) { return Finding{Verdict::NotFound, "nothing answered", "", ""}; }};
+        mic.required = false;
+        CHECK(opt.add(mic));
+        Endpoint oep("dev", "t", "Dev");
+        CHECK(attach_self_check(oep, opt));
+        Response os = oep.handle("GET", "/status", "");
+        CHECK(os.body.find("\"status\":\"ok\"") != std::string::npos);
+        CHECK(opt.report_json().find("\"verdict\":\"not_found\"") != std::string::npos);
+        CHECK(opt.report_json().find("\"optional\":true") != std::string::npos);
+    }
+    // A part that answered earlier and is silent now is a fault, optional or not.
+    {
+        bool present = true;
+        SelfCheck gone;
+        Detector mic{"mic", PeripheralClass::Signal, [&present](Mode) {
+                         return present ? Finding{Verdict::Ok, "answers a tone", "", ""}
+                                        : Finding{Verdict::NotFound, "nothing answered", "", ""};
+                     }};
+        mic.required = false;
+        gone.add(mic);
+        gone.run(Mode::Quick);
+        CHECK(gone.entries()[0].finding.verdict == Verdict::Ok);
+        present = false;
+        gone.run(Mode::Quick);
+        CHECK(gone.entries()[0].finding.verdict == Verdict::Failed);
+        CHECK(gone.entries()[0].finding.evidence.find("answered earlier") != std::string::npos);
+        Endpoint gep("dev", "t", "Dev");
+        CHECK(attach_self_check(gep, gone));
+        CHECK(gep.handle("GET", "/status", "").body.find("PERIPHERAL_FAILED") != std::string::npos);
+        // A Full run is a search that may be cut short, so it does not judge.
+        present = true;
+        gone.run(Mode::Quick);
+        present = false;
+        gone.run(Mode::Full);
+        CHECK(gone.entries()[0].finding.verdict == Verdict::NotFound);
+    }
+    // A device that disappears from a multi-peripheral detector's list.
+    {
+        bool imu = true;
+        SelfCheck many;
+        many.add({"i2c", PeripheralClass::Bus, nullptr, [&imu](Mode) {
+                      std::vector<Finding> out;
+                      if (imu) {
+                          Finding f{Verdict::Ok, "chip id", "", "scan"};
+                          f.name = "imu";
+                          out.push_back(f);
+                      }
+                      return out;
+                  }});
+        many.run(Mode::Quick);
+        imu = false;
+        many.run(Mode::Quick);
+        std::vector<Entry> mr = many.entries();
+        CHECK(mr.size() == 1 && mr[0].name == "imu" && mr[0].finding.verdict == Verdict::Failed);
+    }
+
     // A peripheral only a person can check.
     SelfCheck human;
     CHECK(human.add(make_human_confirmed_detector("speaker", "BCLK 42, WS 39, DOUT 41", "known_map",
