@@ -132,7 +132,7 @@ bool HttpServer::start(const HttpServerConfig& config) {
     }
 
     server_ = handle;
-    if (config.tick_period_ms > 0) {
+    if (config.tick_period_ms > 0 && tick_task_ == nullptr) {
         static TickArgs args;  // one server per device
         args = {&context_, config.tick_period_ms};
         TaskHandle_t task = nullptr;
@@ -148,20 +148,25 @@ bool HttpServer::start(const HttpServerConfig& config) {
     return true;
 }
 
-void HttpServer::stop() {
-    if (tick_task_ != nullptr) {
-        vTaskDelete(static_cast<TaskHandle_t>(tick_task_));
-        tick_task_ = nullptr;
-    }
+void HttpServer::pause() {
     if (server_ != nullptr) {
         httpd_stop(static_cast<httpd_handle_t>(server_));
         server_ = nullptr;
     }
 }
 
+void HttpServer::stop() {
+    pause();
+    if (tick_task_ != nullptr) {
+        vTaskDelete(static_cast<TaskHandle_t>(tick_task_));
+        tick_task_ = nullptr;
+    }
+}
+
 #else
 
 bool HttpServer::start(const HttpServerConfig&) { return false; }
+void HttpServer::pause() { server_ = nullptr; }
 void HttpServer::stop() { server_ = nullptr; }
 
 #endif

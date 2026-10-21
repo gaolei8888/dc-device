@@ -39,6 +39,10 @@ public:
     ~HttpServer() { stop(); }
 
     bool start(const HttpServerConfig& config = {});
+    // Stops listening but leaves the safety watchdog running: a device that forgot
+    // its network must still bring a time-limited capability to its safe state.
+    void pause();
+    // Stops everything, watchdog included.
     void stop();
 
 private:

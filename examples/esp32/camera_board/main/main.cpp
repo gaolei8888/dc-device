@@ -17,7 +17,9 @@
 #include "dc_device_endpoint.hpp"
 #include "dc_device_http_server.hpp"
 #include "dc_device_selfcheck.hpp"
-#include "dc_device_wifi.hpp"
+#include "dc_device_setup.hpp"
+#include "dc_device_setup_console.hpp"
+#include "dc_device_wifi_manager.hpp"
 
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
@@ -193,13 +195,20 @@ bool screen_test() {
 static const char* TAG = "dc-device";
 static Endpoint endpoint("camera_board_01", "camera_board", "ESP32-S3 Camera Board");
 static dc_device::esp32::HttpServer http_server(endpoint);
+#ifndef DC_DEVICE_VERSION
+#define DC_DEVICE_VERSION "0.1.0+dev"  // release builds pass 0.1.0+<git commit> (scripts/build-release.sh)
+#endif
+
 static dc_device::esp32::SelfCheck self_check;
+static dc_device::esp32::WifiManager wifi_manager;
+static dc_device::esp32::HttpServerConfig http_config;
 
 static InvokeResult heap_read(const json::Value&) {
     return InvokeResult::success(std::string("{\"free_heap_bytes\":") +
                                  std::to_string(esp_get_free_heap_size()) + "}");
 }
 
+#if !CONFIG_DC_DEVICE_RELEASE
 // Test fixture for the safety watchdog (docs/safety-kernel-v0.1.md): "holds" a
 // pretend output for at most 2 s. Times come from the device's own clock so the
 // network does not enter into the measurement.
@@ -216,6 +225,7 @@ static InvokeResult hold_state(const json::Value&) {
         ",\"release_count\":" + std::to_string(g_release_count) +
         ",\"held_for_ms\":" + std::to_string(released >= held ? (released - held) / 1000 : -1) + "}");
 }
+#endif
 
 extern "C" void app_main() {
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -247,6 +257,7 @@ extern "C" void app_main() {
     };
     endpoint.add(sc);
 
+#if !CONFIG_DC_DEVICE_RELEASE
     // Debugging aid: try a microphone on given pins. Drives sck and ws.
     dc_device::esp32::CapabilitySpec trial;
     trial.name = "debug.mic_try";
@@ -322,6 +333,7 @@ extern "C" void app_main() {
     hold_read.parameters_json = R"({"type":"object","properties":{}})";
     hold_read.handler = hold_state;
     endpoint.add(hold_read);
+#endif  // !CONFIG_DC_DEVICE_RELEASE
 
     dc_device::esp32::CapabilitySpec heap;
     heap.name = "heap.read";
@@ -362,7 +374,7 @@ extern "C" void app_main() {
 
     dc_device::esp32::Identity id;
     id.model = "ESP32-S3 Camera Board";
-    id.firmware_version = "0.1.0";
+    id.firmware_version = DC_DEVICE_VERSION;
     uint8_t mac[6] = {};
     if (esp_efuse_mac_get_default(mac) == ESP_OK) {
         char serial[13];
@@ -370,26 +382,39 @@ extern "C" void app_main() {
                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         id.serial = serial;
     }
+    dc_device::esp32::SetupInfo setup_info;  // what `hello` says; same values as /identity
+    setup_info.device_id = "camera_board_01";
+    setup_info.type = "camera_board";
+    setup_info.model = id.model;
+    setup_info.firmware_version = id.firmware_version;
+    setup_info.serial = id.serial;
     endpoint.set_identity(std::move(id));
     dc_device::esp32::register_chip_diagnostics(endpoint);
     endpoint.add_diagnostic("free_heap_bytes", [] { return std::to_string(esp_get_free_heap_size()); });
 
-    dc_device::esp32::WifiConfig wifi;
-    wifi.ssid = CONFIG_DC_DEVICE_WIFI_SSID;
-    wifi.password = CONFIG_DC_DEVICE_WIFI_PASSWORD;
-    if (wifi.ssid.empty()) {
-        ESP_LOGE(TAG, "No Wi-Fi SSID set");
-        return;
-    }
-    if (!dc_device::esp32::connect_wifi(wifi)) {
-        ESP_LOGE(TAG, "Wi-Fi connection failed; HTTP server not started");
-        return;
-    }
-    dc_device::esp32::HttpServerConfig http;
-    http.port = CONFIG_DC_DEVICE_HTTP_PORT;
     if (!endpoint.validate_safety()) {
-        ESP_LOGE(TAG, "Time-limited capability without a safe state; HTTP server not started");
+        ESP_LOGE(TAG, "Time-limited capability without a safe state; not serving");
         return;
     }
-    http_server.start(http);
+    http_config.port = CONFIG_DC_DEVICE_HTTP_PORT;
+
+    // Network: whatever was stored by USB setup. A network compiled in is only for
+    // development and is left out of release builds.
+    std::string dev_ssid, dev_password;
+#if !CONFIG_DC_DEVICE_RELEASE
+    dev_ssid = CONFIG_DC_DEVICE_WIFI_SSID;
+    dev_password = CONFIG_DC_DEVICE_WIFI_PASSWORD;
+#endif
+    dc_device::esp32::WifiManager::Callbacks callbacks;
+    callbacks.on_up = [] { http_server.start(http_config); };           // safe to repeat
+    callbacks.on_forgotten = [] { http_server.pause(); };              // the watchdog keeps running
+    if (!wifi_manager.begin(dev_ssid, dev_password, callbacks)) {
+        ESP_LOGE(TAG, "Wi-Fi could not start");
+    }
+
+    // USB setup: serves hello / wifi / forget_wifi on the console port in every
+    // network state. Needs no network to answer.
+    static dc_device::esp32::SetupProtocol setup(setup_info, wifi_manager.backend(http_config.port),
+                                                 dc_device::esp32::write_setup_line);
+    dc_device::esp32::start_setup_console(setup);
 }

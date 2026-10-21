@@ -1,12 +1,19 @@
 menu "dc-device camera board"
 
 config DC_DEVICE_WIFI_SSID
-    string "Wi-Fi SSID"
+    string "Wi-Fi SSID (development only; ignored in a release build)"
     default ""
 
 config DC_DEVICE_WIFI_PASSWORD
     string "Wi-Fi password"
     default ""
+
+config DC_DEVICE_RELEASE
+    bool "Release build"
+    default n
+    help
+        Leaves out the debug.* capabilities and ignores the Wi-Fi name and
+        password above. The network then comes only from USB setup.
 
 config DC_DEVICE_HTTP_PORT
     int "HTTP port"
