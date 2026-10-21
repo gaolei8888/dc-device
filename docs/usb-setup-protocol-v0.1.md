@@ -1,7 +1,8 @@
 # USB setup protocol v0.1
 
-Status: draft. Specification only; no firmware implements it yet. Nothing here
-has been run on hardware.
+Status: draft. `hello`, `wifi` and `forget_wifi` are implemented in the
+`camera_board` example (see "Implementation" at the end) and covered by host
+tests. **Nothing has been run on a board yet.** `token` is not implemented.
 
 Purpose: the first time a device is connected, a host application (DC Desktop)
 gives it Wi-Fi credentials over the USB cable. After that the cable only
@@ -190,9 +191,9 @@ or the chip is in download mode); see "Host behaviour".
 | `state` | HTTP server | Meaning |
 |---|---|---|
 | `unconfigured` | not running | No stored credentials. Only this protocol is served. |
-| `connecting` | not running | Credentials stored, joining the network. |
+| `connecting` | not yet started, or still running | Credentials stored, joining the network. |
 | `connected` | running | Has an address. |
-| `offline` | not running | Credentials stored but the network cannot be joined. |
+| `offline` | still running if it was started | Credentials stored but the network cannot be joined. |
 
 Rules for the firmware:
 
@@ -202,6 +203,10 @@ Rules for the firmware:
 - On a failed connection, move to `offline`, keep serving this protocol, and
   retry with a growing delay (5 s doubling to a maximum of 60 s). Do not
   reboot in a loop.
+- **The HTTP server is not stopped when the network drops** (a change from the first
+  draft, which stopped it): its safety watchdog runs on the same task, and a
+  time-limited capability must still reach its safe state with no network. It is
+  stopped only by `forget_wifi`, and even then the watchdog keeps running.
 - This protocol stays active after setup, so a host can read the current `ip`
   with `hello` later. It never replaces the HTTP transport.
 - A device that declares a `motion` capability asserts its safe state at boot
@@ -244,10 +249,10 @@ decision. These points come from how ESP32 USB behaves.
 ## Open items
 
 - `token`: waits for gap 15 and, for the pairing meaning, gap 16.
-- Where firmware images are distributed from and who builds them with ESP-IDF
-  are undecided (pinned version and checksum, preferably shipped with the host
-  installer).
-- Flash and NVS layout (namespace and keys for the credentials).
+- Where firmware images are distributed from is undecided. How one is built is not:
+  `scripts/build-release.sh` (see "Implementation").
+- Flash and NVS layout: decided for the first implementation, namespace `dcsetup`,
+  keys `ssid` and `pass`, plaintext (see "Implementation"). Not final.
 - Whether the host should be able to read the current state without opening the
   port exclusively (for example while another tool holds it).
 - Behavior when two hosts talk at once: not defined; assume one.
@@ -268,3 +273,51 @@ decision. These points come from how ESP32 USB behaves.
   its authentication (gaps 15 and 16).
 - **Discovery** (gap 17). After setup the host already knows the address from
   the `wifi` response.
+
+## Implementation (camera_board example)
+
+Where: protocol and parsing in `platforms/esp32/src/dc_device_setup.cpp` (host
+tested, `tests/esp32/run.sh`); Wi-Fi in `dc_device_wifi_manager.cpp`; the serial
+reader in `dc_device_setup_console.cpp`; wired up in
+`examples/esp32/camera_board/main/main.cpp`.
+
+- Commands: `hello`, `wifi`, `forget_wifi`. `token` answers `unknown_command` until
+  gap 15 is decided. HTTP has no authentication and is unchanged.
+- Serial input: the UART console only (a board with a USB-to-serial chip, such as the
+  CH343 boards). On a build whose console is the chip's native USB the firmware logs
+  that setup is unavailable. That path is not written.
+- Storage: NVS namespace `dcsetup`, keys `ssid` and `pass`, written only after the
+  connection succeeded. Plaintext. A network compiled into a development build is
+  used only when nothing is stored and is never saved.
+- Failure codes come from the Wi-Fi driver's disconnect reason: no access point seen
+  -> `wifi_not_found`; password, handshake or security mode rejected ->
+  `wifi_auth_failed`; joined but no DHCP address -> `wifi_no_address`; anything else
+  -> `wifi_timeout`. The `wifi` command gives up after 18 s (the draft allows 20 s).
+  Checked on one board (ESP32-S3, CH343 UART console): a wrong password gave
+  `wifi_auth_failed` and an unknown name gave `wifi_not_found`. `wifi_no_address`
+  and the generic `wifi_timeout` were not reproduced.
+- A single refused association is not final: within the 18 s window the device asks
+  again unless the reason is a wrong password or an unknown network. This matters
+  after a reset, when the access point may still hold the old session (measured:
+  first association refused with reason 208, second one accepted).
+- Measured on that board: `wifi` to a good network takes 5-12 s; after a reboot with
+  stored settings the device is on the network and serving HTTP about 10 s later;
+  a failed `wifi` while connected leaves the stored network in place and the device
+  returns to it within about 11 s; `forget_wifi` answers in under 0.5 s, also while
+  a connection attempt is running (it cancels the attempt); the password appeared
+  neither in any reply nor in `/diagnostics`.
+- **Opening the serial port resets this board** (the CH343 DTR/RTS lines), even with
+  both lines cleared before opening. A host must wait about 2 s after opening before
+  the first command, and every open starts a new boot (state `connecting` while the
+  stored network is rejoined).
+- Retry after a failure or drop: 5 s, doubling to 60 s, no reboot.
+- A second `wifi` or `forget_wifi` while a `wifi` is running answers `busy`; `hello`
+  always answers.
+- Release build: `scripts/build-release.sh` builds with `CONFIG_DC_DEVICE_RELEASE=y`
+  (no `debug.*` capabilities, no compiled-in network), version
+  `0.1.0+<git commit>`, reproducible. It refuses a dirty tree (`--allow-dirty` for
+  trying it), checks that the image contains no `debug.` string, and writes
+  `release/camera_board/<version>/` with `bootloader.bin` (0x0), `partition-table.bin`
+  (0x8000), `dc_device_camera_board.bin` (0x10000) and `manifest.json` (file, offset,
+  size, sha256, version, commit, ESP-IDF version, flash settings, never erase the whole
+  flash). `release/` is git-ignored.

@@ -12,6 +12,7 @@
 #include "dc_device_i2c_ids.hpp"
 #include "dc_device_pins.hpp"
 #include "dc_device_selfcheck.hpp"
+#include "dc_device_setup.hpp"
 #include "dc_device_json.hpp"
 
 using namespace dc_device;
@@ -912,6 +913,247 @@ static void test_audio_analysis() {
     CHECK(tone_gain(real.data(), n, again.data(), n, rate, 880.0) < 3);
 }
 
+// ---- USB setup protocol (docs/usb-setup-protocol-v0.1.md) ----------------------
+
+struct SetupRig {
+    std::vector<std::string> out;  // every line the device wrote
+    WifiState state = WifiState::Unconfigured;
+    std::string ip;
+    int forgets = 0;
+    bool forget_ok = true;
+    // `wifi` answers at once with this, unless `defer` is set: then `finish` runs it later.
+    WifiOutcome outcome;
+    bool defer = false;
+    std::function<void(const WifiOutcome&)> finish;
+    std::function<void(const std::string&)> progress_cb;
+    std::string seen_ssid, seen_password;
+    int wifi_calls = 0;
+    SetupProtocol proto;
+
+    static SetupInfo info() {
+        SetupInfo i;
+        i.device_id = "camera_board_01";
+        i.type = "camera_board";
+        i.model = "ESP32-S3 Camera Board";
+        i.firmware_version = "0.1.0+abc1234";
+        i.serial = "B8F862E96718";
+        return i;
+    }
+    SetupBackend backend() {
+        SetupBackend b;
+        b.state = [this] { return state; };
+        b.ip = [this] { return ip; };
+        b.port = 8787;
+        b.start_wifi = [this](const std::string& ssid, const std::string& password,
+                              std::function<void(const std::string&)> progress,
+                              std::function<void(const WifiOutcome&)> done) {
+            ++wifi_calls;
+            seen_ssid = ssid;
+            seen_password = password;
+            progress("connecting");
+            progress_cb = progress;
+            if (defer) {
+                finish = done;
+            } else {
+                done(outcome);
+            }
+        };
+        b.forget_wifi = [this] {
+            ++forgets;
+            return forget_ok;
+        };
+        return b;
+    }
+    SetupRig() : proto(info(), backend(), [this](const std::string& line) { out.push_back(line); }) {}
+    void say(const std::string& text) { proto.feed(text.data(), text.size()); }
+    void line(const std::string& json) { say("DCSETUP " + json + "\n"); }
+    std::string last() const { return out.empty() ? "" : out.back(); }
+};
+
+static void test_setup_protocol() {
+    // hello: no secret, recognises the device, reports the state.
+    {
+        SetupRig r;
+        r.line(R"({"v":1,"id":7,"cmd":"hello"})");
+        CHECK_EQ(r.last(),
+                 R"(DCSETUP {"v":1,"id":7,"ok":true,"setup_protocol":1,"device_id":"camera_board_01",)"
+                 R"("type":"camera_board","model":"ESP32-S3 Camera Board","firmware_version":"0.1.0+abc1234",)"
+                 R"("serial":"B8F862E96718","state":"unconfigured"})");
+        r.state = WifiState::Connected;
+        r.ip = "192.168.1.20";
+        r.line(R"({"v":1,"id":8,"cmd":"hello"})");
+        CHECK(r.last().find(R"("state":"connected","port":8787,"ip":"192.168.1.20")") != std::string::npos);
+        for (auto st : {WifiState::Connecting, WifiState::Offline}) {
+            r.state = st;
+            r.line(R"({"v":1,"id":9,"cmd":"hello"})");
+            CHECK(r.last().find(std::string("\"state\":\"") + wifi_state_name(st) + "\"}") != std::string::npos);
+        }
+    }
+    // Framing: log noise and lines without the prefix are ignored, \r\n works, a
+    // line can arrive in pieces, an empty line is ignored.
+    {
+        SetupRig r;
+        r.say("I (123) boot: starting\n\n");
+        r.say("garbage DCSETUP {\"v\":1,\"id\":1,\"cmd\":\"hello\"}\n");  // prefix not at the start
+        r.say("DCSETUP{\"v\":1,\"id\":1,\"cmd\":\"hello\"}\n");           // no space
+        r.say("dcsetup {\"v\":1,\"id\":1,\"cmd\":\"hello\"}\n");          // case matters
+        CHECK(r.out.empty());
+        r.say("DCSETUP {\"v\":1,\"id\":2,");
+        CHECK(r.out.empty());
+        r.say("\"cmd\":\"hello\"}\r\n");
+        CHECK(r.out.size() == 1 && r.last().find("\"id\":2,\"ok\":true") != std::string::npos);
+        // A partial log line before the protocol line is cut off by the sender's own \n.
+        r.say("W (5) wifi: partial");
+        r.say("\nDCSETUP {\"v\":1,\"id\":3,\"cmd\":\"hello\"}\n");
+        CHECK(r.out.size() == 2 && r.last().find("\"id\":3,\"ok\":true") != std::string::npos);
+    }
+    // Errors that apply to any command.
+    {
+        SetupRig r;
+        r.line("not json");
+        CHECK_EQ(r.last(),
+                 R"(DCSETUP {"v":1,"id":null,"ok":false,"error":{"code":"bad_request","message":"The line is not a JSON object."}})");
+        r.line("[1,2]");
+        CHECK(r.last().find("\"id\":null") != std::string::npos && r.last().find("bad_request") != std::string::npos);
+        r.line(R"({"v":1,"cmd":"hello"})");  // no id
+        CHECK(r.last().find("\"id\":null") != std::string::npos && r.last().find("bad_request") != std::string::npos);
+        r.line(R"({"v":1,"id":"x","cmd":"hello"})");  // id not an integer
+        CHECK(r.last().find("\"id\":null") != std::string::npos);
+        r.line(R"({"v":1,"id":1.5,"cmd":"hello"})");
+        CHECK(r.last().find("\"id\":null") != std::string::npos);
+        r.line(R"({"id":4,"cmd":"hello"})");  // no v
+        CHECK(r.last().find("\"id\":4") != std::string::npos && r.last().find("bad_request") != std::string::npos);
+        r.line(R"({"v":2,"id":5,"cmd":"hello"})");
+        CHECK(r.last().find("unsupported_version") != std::string::npos &&
+              r.last().find("\"supported\":[1]") != std::string::npos && r.last().find("\"id\":5") != std::string::npos);
+        r.line(R"({"v":1,"id":6})");  // no cmd
+        CHECK(r.last().find("bad_request") != std::string::npos && r.last().find("\"id\":6") != std::string::npos);
+        r.line(R"({"v":1,"id":6,"cmd":"reboot"})");
+        CHECK(r.last().find("unknown_command") != std::string::npos);
+        // `token` is not implemented yet (waits for the authentication decision).
+        r.line(R"({"v":1,"id":6,"cmd":"token"})");
+        CHECK(r.last().find("unknown_command") != std::string::npos);
+        // Unknown fields are ignored.
+        r.line(R"({"v":1,"id":9,"cmd":"hello","future":true})");
+        CHECK(r.last().find("\"ok\":true") != std::string::npos);
+    }
+    // A line over 512 bytes is discarded to its end, answered once, and the next line works.
+    {
+        SetupRig r;
+        std::string big = std::string("DCSETUP {\"v\":1,\"id\":1,\"cmd\":\"hello\",\"pad\":\"") + std::string(600, 'a') + "\"}\n";
+        r.say(big);
+        CHECK(r.out.size() == 1 && r.last().find("line_too_long") != std::string::npos &&
+              r.last().find("\"id\":null") != std::string::npos);
+        r.line(R"({"v":1,"id":2,"cmd":"hello"})");
+        CHECK(r.out.size() == 2 && r.last().find("\"id\":2,\"ok\":true") != std::string::npos);
+        // A long line that is not ours is just noise: no answer.
+        r.say(std::string(2000, 'x') + "\n");
+        CHECK(r.out.size() == 2);
+        // The largest line allowed still works: 512 bytes including the prefix.
+        std::string head = R"({"v":1,"id":3,"cmd":"hello","pad":")";
+        std::string tail = R"("})";
+        std::string pad(512 - 8 - head.size() - tail.size(), 'b');
+        r.line(head + pad + tail);
+        CHECK(r.out.size() == 3 && r.last().find("\"id\":3,\"ok\":true") != std::string::npos);
+        r.line(head + pad + "b" + tail);  // one byte more
+        CHECK(r.out.size() == 4 && r.last().find("line_too_long") != std::string::npos);
+    }
+    // wifi: validation first, nothing reaches the backend.
+    {
+        SetupRig r;
+        r.line(R"({"v":1,"id":1,"cmd":"wifi","ssid":"","password":"correct horse"})");
+        CHECK(r.last().find("invalid_ssid") != std::string::npos);
+        r.line(R"({"v":1,"id":1,"cmd":"wifi","ssid":")" + std::string(33, 's') + R"(","password":"correct horse"})");
+        CHECK(r.last().find("invalid_ssid") != std::string::npos);
+        r.line(R"({"v":1,"id":1,"cmd":"wifi","ssid":"net","password":"short"})");
+        CHECK(r.last().find("invalid_password") != std::string::npos);
+        r.line(R"({"v":1,"id":1,"cmd":"wifi","ssid":"net","password":")" + std::string(64, 'p') + R"("})");
+        CHECK(r.last().find("invalid_password") != std::string::npos);
+        r.line(R"({"v":1,"id":1,"cmd":"wifi","ssid":"net"})");  // password missing
+        CHECK(r.last().find("bad_request") != std::string::npos);
+        r.line(R"({"v":1,"id":1,"cmd":"wifi","ssid":5,"password":""})");
+        CHECK(r.last().find("bad_request") != std::string::npos);
+        CHECK(r.wifi_calls == 0);
+        // Edges that are valid: 32-byte name, 8 and 63 character passwords, open network.
+        for (std::string pw : {std::string(8, 'p'), std::string(63, 'p'), std::string()}) {
+            r.outcome.ok = true;
+            r.outcome.ip = "10.0.0.2";
+            r.line(R"({"v":1,"id":2,"cmd":"wifi","ssid":")" + std::string(32, 's') + R"(","password":")" + pw + R"("})");
+            CHECK(r.last().find("\"ok\":true") != std::string::npos);
+        }
+        CHECK(r.wifi_calls == 3);
+    }
+    // wifi success: progress event, then the answer; the password is never echoed.
+    {
+        SetupRig r;
+        r.outcome.ok = true;
+        r.outcome.ip = "192.168.1.20";
+        r.line(R"({"v":1,"id":2,"cmd":"wifi","ssid":"SchoolNet","password":"correct horse"})");
+        CHECK(r.out.size() == 2);
+        CHECK_EQ(r.out[0], R"(DCSETUP {"v":1,"id":2,"event":"progress","stage":"connecting"})");
+        CHECK_EQ(r.out[1], R"(DCSETUP {"v":1,"id":2,"ok":true,"state":"connected","ip":"192.168.1.20","port":8787})");
+        CHECK(r.seen_ssid == "SchoolNet" && r.seen_password == "correct horse");
+        for (const std::string& line : r.out) CHECK(line.find("correct horse") == std::string::npos);
+        // Characters that need escaping in JSON reach the backend intact.
+        r.line(R"({"v":1,"id":3,"cmd":"wifi","ssid":"café \"x\"","password":"p\\w\"rd1234"})");
+        CHECK(r.seen_ssid == "caf\xC3\xA9 \"x\"" && r.seen_password == "p\\w\"rd1234");
+    }
+    // wifi failures carry the backend's code and are not mistaken for success.
+    {
+        SetupRig r;
+        for (const char* code : {"wifi_not_found", "wifi_auth_failed", "wifi_no_address", "wifi_timeout"}) {
+            r.outcome.ok = false;
+            r.outcome.code = code;
+            r.outcome.message = "nope";
+            r.line(R"({"v":1,"id":4,"cmd":"wifi","ssid":"net","password":"correct horse"})");
+            CHECK(r.last().find(std::string("\"code\":\"") + code + "\"") != std::string::npos);
+            CHECK(r.last().find("\"ok\":false") != std::string::npos && r.last().find("connected") == std::string::npos);
+        }
+        r.outcome.code = "";  // a backend that forgot the code: internal, never silent
+        r.line(R"({"v":1,"id":4,"cmd":"wifi","ssid":"net","password":"correct horse"})");
+        CHECK(r.last().find("\"code\":\"internal\"") != std::string::npos);
+    }
+    // While a wifi command runs: hello still answers, a second wifi or forget is busy,
+    // and the slot frees when it finishes.
+    {
+        SetupRig r;
+        r.defer = true;
+        r.state = WifiState::Connecting;
+        r.line(R"({"v":1,"id":1,"cmd":"wifi","ssid":"net","password":"correct horse"})");
+        CHECK(r.out.size() == 1);  // the progress event; no answer yet
+        r.line(R"({"v":1,"id":2,"cmd":"hello"})");
+        CHECK(r.last().find("\"id\":2,\"ok\":true") != std::string::npos &&
+              r.last().find("\"state\":\"connecting\"") != std::string::npos);
+        r.line(R"({"v":1,"id":3,"cmd":"wifi","ssid":"net2","password":"correct horse"})");
+        CHECK(r.last().find("\"code\":\"busy\"") != std::string::npos && r.last().find("\"id\":3") != std::string::npos);
+        r.line(R"({"v":1,"id":4,"cmd":"forget_wifi"})");
+        CHECK(r.last().find("\"code\":\"busy\"") != std::string::npos);
+        CHECK(r.wifi_calls == 1 && r.forgets == 0);
+        r.progress_cb("getting_address");
+        CHECK(r.last().find("\"stage\":\"getting_address\"") != std::string::npos);
+        WifiOutcome ok;
+        ok.ok = true;
+        ok.ip = "10.1.1.9";
+        r.finish(ok);
+        CHECK(r.last().find("\"id\":1,\"ok\":true,\"state\":\"connected\"") != std::string::npos);
+        r.defer = false;
+        r.outcome = ok;
+        r.line(R"({"v":1,"id":5,"cmd":"wifi","ssid":"net","password":"correct horse"})");
+        CHECK(r.last().find("\"id\":5,\"ok\":true") != std::string::npos);
+    }
+    // forget_wifi.
+    {
+        SetupRig r;
+        r.line(R"({"v":1,"id":1,"cmd":"forget_wifi"})");
+        CHECK_EQ(r.last(), R"(DCSETUP {"v":1,"id":1,"ok":true,"state":"unconfigured"})");
+        CHECK(r.forgets == 1);
+        r.forget_ok = false;
+        r.line(R"({"v":1,"id":2,"cmd":"forget_wifi"})");
+        CHECK(r.last().find("\"code\":\"internal\"") != std::string::npos);
+    }
+    CHECK_EQ(wifi_state_name(WifiState::Offline), "offline");
+}
+
 int main() {
     test_identity();
     test_health_registration();
@@ -928,6 +1170,7 @@ int main() {
     test_scan_pins();
     test_i2c_ids();
     test_audio_analysis();
+    test_setup_protocol();
     if (g_failures == 0) {
         std::printf("all tests passed\n");
         return 0;
