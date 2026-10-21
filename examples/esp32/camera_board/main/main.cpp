@@ -351,8 +351,10 @@ extern "C" void app_main() {
     self_check.add(optional(dc_device::esp32::make_mic_detector(stimulus)));
     // Nothing on the board can observe these two. The pins are from the board's old
     // program, not measured.
-    self_check.add(dc_device::esp32::make_human_confirmed_detector(
-        "speaker", "BCLK 42, WS 39, DOUT 41", "known_map", "speaker.beep", "Did you hear one short beep?"));
+    // The speaker is called working when the microphone heard the tone played on it.
+    self_check.add(dc_device::esp32::make_heard_by_detector(
+        "speaker", "BCLK 42, WS 39, DOUT 41", "known_map", "speaker.beep", "Did you hear one short beep?",
+        self_check, "microphone"));
     self_check.add(dc_device::esp32::make_human_confirmed_detector(
         "screen", "SCK 46, MOSI 3, DC 1, CS 14", "known_map", "screen.fill_test",
         "Did the screen turn red, then green, then blue, then black?"));

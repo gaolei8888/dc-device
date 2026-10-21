@@ -223,12 +223,18 @@ contract change and is not decided here.
   judgement required the low 8 bits of every 32-bit word to be zero, and this
   microphone's are not. Every detector must be run against a part that is there and a
   part that is not before its "not found" is believed.
-- **The speaker and screen rows are not detections.** The camera example lists them
-  unconditionally, with pins taken from the board's old program, so they appear on
-  every board running it, including one with no speaker or screen. They are
-  `unverified` with a `confirm` question, which is honest about the verdict but not
-  about presence. Turning them into real detections needs a way to tell what board it
-  is, or an observer.
+- **The speaker and screen rows are not detections of presence.** The camera example
+  lists them unconditionally, with pins taken from the board's old program, so they
+  appear on every board running it, including one with no speaker or screen. The pins
+  are still a table, not a search: a blind search over three pins (bit clock, word
+  clock, data) is thousands of combinations and was not attempted.
+  What changed: the **speaker** is now `ok` when the microphone heard the tone that was
+  played on those pins (`make_heard_by_detector`), so a board that has both needs no
+  person for it. Checked on board 3 (`ok`, "the microphone heard the tone this board
+  played") and board 1, which has no microphone (stays `unverified` with the question).
+  This proves the table's pins make sound; it does not prove a speaker on a board whose
+  table is wrong, because then the tone would not be heard and the row stays
+  `unverified`. The **screen** stays `unverified`: nothing on these boards can see it.
 - **A line that moves is not a part.** The microphone is accepted as working only if
   it answers a known sound: a 880 Hz tone played on the speaker at the same time must
   show up in the samples at least 8 times stronger than in a quiet read. Without a

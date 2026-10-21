@@ -47,6 +47,10 @@ struct Finding {
     // The device cannot know the answer; remembering it is the host's job.
     std::string confirm_capability = "";
     std::string confirm_question = "";
+    // Set by a detector that listens (a microphone) when what it heard was the
+    // stimulus the device itself played. A source of sound (a speaker) can then be
+    // called working because something else observed it.
+    bool heard_stimulus = false;
 };
 
 struct Detector {
@@ -91,6 +95,9 @@ public:
     // one not_run row per detector.
     std::vector<Entry> entries() const;
     bool ran() const { return ran_; }
+    // The latest finding for a peripheral by name (a detector's own name, or the name
+    // of one of its rows), or nullptr. For detectors that depend on another's result.
+    const Finding* finding(const std::string& name) const;
 
 private:
     std::vector<Detector> detectors_;
@@ -107,6 +114,15 @@ private:
 // means taken from a table, not measured.
 Detector make_human_confirmed_detector(std::string name, std::string wiring, std::string source,
                                        std::string capability, std::string question);
+
+// A sound source (speaker): `ok` when `listener` (a detector registered before this
+// one) reports that it heard the tone this board played; otherwise `unverified`,
+// with the capability and question that let a person check. The wiring is the
+// caller's: it is where the tone is played, and the listener's tone only proves
+// that it comes out.
+Detector make_heard_by_detector(std::string name, std::string wiring, std::string source,
+                                std::string capability, std::string question,
+                                const SelfCheck& check, std::string listener);
 
 // Registers three things on the endpoint:
 //   health check "peripherals"  - runs Quick; cheap

@@ -713,6 +713,35 @@ static void test_selfcheck() {
         CHECK(mr.size() == 1 && mr[0].name == "imu" && mr[0].finding.verdict == Verdict::Failed);
     }
 
+    // A speaker is working when the microphone heard the tone played on it.
+    {
+        Verdict mic_verdict = Verdict::Ok;
+        bool heard = true;
+        SelfCheck pair;
+        pair.add({"microphone", PeripheralClass::Signal, [&](Mode) {
+                      Finding f{mic_verdict, "answers a tone", "SD 2", "scan"};
+                      f.heard_stimulus = heard;
+                      return f;
+                  }});
+        CHECK(pair.add(make_heard_by_detector("speaker", "DOUT 41", "known_map", "speaker.beep",
+                                              "Did you hear a beep?", pair, "microphone")));
+        pair.run(Mode::Quick);
+        const Finding* sp = pair.finding("speaker");
+        CHECK(sp != nullptr && sp->verdict == Verdict::Ok);
+        CHECK(sp->wiring == "DOUT 41" && sp->source == "known_map");
+        // The microphone only found a signal that did not answer: ask a person.
+        heard = false;
+        pair.run(Mode::Quick);
+        sp = pair.finding("speaker");
+        CHECK(sp->verdict == Verdict::Unverified && sp->confirm_capability == "speaker.beep");
+        // No microphone at all: same.
+        mic_verdict = Verdict::NotFound;
+        heard = true;
+        pair.run(Mode::Quick);
+        CHECK(pair.finding("speaker")->verdict == Verdict::Unverified);
+        CHECK(pair.finding("nothing") == nullptr);
+    }
+
     // A peripheral only a person can check.
     SelfCheck human;
     CHECK(human.add(make_human_confirmed_detector("speaker", "BCLK 42, WS 39, DOUT 41", "known_map",

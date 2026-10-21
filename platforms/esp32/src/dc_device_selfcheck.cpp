@@ -153,6 +153,37 @@ Detector make_human_confirmed_detector(std::string name, std::string wiring, std
     return d;
 }
 
+const Finding* SelfCheck::finding(const std::string& name) const {
+    for (size_t i = 0; i < detectors_.size(); ++i) {
+        for (const Finding& f : findings_[i]) {
+            if ((f.name.empty() ? detectors_[i].name : f.name) == name) return &f;
+        }
+    }
+    return nullptr;
+}
+
+Detector make_heard_by_detector(std::string name, std::string wiring, std::string source,
+                                std::string capability, std::string question,
+                                const SelfCheck& check, std::string listener) {
+    Detector d = make_human_confirmed_detector(name, wiring, source, capability, question);
+    Detector human = d;
+    d.klass = PeripheralClass::Signal;
+    d.run = [human, &check, listener = std::move(listener)](Mode mode) {
+        const Finding* heard = check.finding(listener);
+        if (heard == nullptr || heard->verdict != Verdict::Ok || !heard->heard_stimulus) {
+            return human.run(mode);
+        }
+        Finding f;
+        f.verdict = Verdict::Ok;
+        f.klass = PeripheralClass::Signal;
+        f.evidence = "the " + listener + " heard the tone this board played";
+        f.wiring = human.run(mode).wiring;
+        f.source = human.run(mode).source;
+        return f;
+    };
+    return d;
+}
+
 static CheckResult aggregate(const SelfCheck& check) {
     std::string failed, missing;
     for (const Entry& e : check.entries()) {

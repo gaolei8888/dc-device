@@ -259,6 +259,7 @@ Finding make_finding(const MicState& s, const Verification& v, const MicStimulus
     char b[200];
     if (v.tone_ok()) {
         f.verdict = Verdict::Ok;
+        f.heard_stimulus = true;
         // The gain divides by a very small quiet level, so a large number says nothing
         // beyond "far above the threshold"; do not print it as a measurement.
         snprintf(b, sizeof(b), "answers a %d Hz tone from the speaker (more than %.0f times stronger at that frequency), level %.4f of full scale",

@@ -189,7 +189,11 @@ needs enabling, one on the right slot) is found. Only two samples exist.
 
 ## 11. Speaker and screen (a person is the observer)
 
-Neither can be observed by the board. Tell the person before each test.
+The screen cannot be observed by the board. The speaker can, on a board that has a
+working microphone: after the microphone search ends in `ok`, the speaker row is `ok`
+too ("the microphone heard the tone this board played"). On a board without one, or
+before the search ends, it stays `unverified` and needs a person. Tell the person before
+each test.
 
 1. `POST /invoke` `speaker.beep`: one 880 Hz tone of 0.3 s at about 6 % of full scale.
 2. `POST /invoke` `screen.fill_test`: red, green, blue, black, about 0.7 s each.
