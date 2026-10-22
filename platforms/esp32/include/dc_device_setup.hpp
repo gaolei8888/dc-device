@@ -51,6 +51,13 @@ struct SetupBackend {
         start_wifi;
     // Erases stored credentials and stops serving HTTP. Returns false on failure.
     std::function<bool()> forget_wifi;
+    // Access token (docs/superpowers/specs/2026-10-20-access-token-design.md). Empty =
+    // this device has none: `token` and `unpair` answer `internal`, `hello` says unpaired.
+    std::function<bool()> paired;
+    // Makes a new token, stores its hash (the old one stops working), returns it in
+    // `token`. False if storage failed; the old token then still works.
+    std::function<bool(std::string& token)> issue_token;
+    std::function<bool()> unpair;  // erases the token; ok if there is none
 };
 
 constexpr size_t kSetupMaxLine = 512;  // including the "DCSETUP " prefix
@@ -74,6 +81,8 @@ private:
     void hello(const std::string& id);
     void wifi(const std::string& id, const std::string& ssid, const std::string& password);
     void forget(const std::string& id);
+    void token(const std::string& id);
+    void unpair(const std::string& id);
 
     SetupInfo info_;
     SetupBackend backend_;

@@ -1,11 +1,14 @@
 // Host-side tests for the ESP32 HTTP endpoint core (no ESP-IDF required).
 // Run: tests/esp32/run.sh
 
+#include <array>
 #include <cmath>
 #include <cstdio>
+#include <cctype>
 #include <cstdlib>
 #include <string>
 
+#include "dc_device_access.hpp"
 #include "dc_device_audio_analysis.hpp"
 #include "dc_device_chip.hpp"
 #include "dc_device_endpoint.hpp"
@@ -13,6 +16,7 @@
 #include "dc_device_pins.hpp"
 #include "dc_device_selfcheck.hpp"
 #include "dc_device_setup.hpp"
+#include "dc_device_sha256.hpp"
 #include "dc_device_json.hpp"
 
 using namespace dc_device;
@@ -928,6 +932,10 @@ struct SetupRig {
     std::function<void(const std::string&)> progress_cb;
     std::string seen_ssid, seen_password;
     int wifi_calls = 0;
+    bool is_paired = false;
+    bool issue_ok = true;
+    int tokens_issued = 0;
+    std::string current_token;
     SetupProtocol proto;
 
     static SetupInfo info() {
@@ -962,6 +970,20 @@ struct SetupRig {
             ++forgets;
             return forget_ok;
         };
+        b.paired = [this] { return is_paired; };
+        b.issue_token = [this](std::string& token) {
+            if (!issue_ok) return false;
+            ++tokens_issued;
+            current_token = "tok-" + std::to_string(tokens_issued) + "-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+            is_paired = true;
+            token = current_token;
+            return true;
+        };
+        b.unpair = [this] {
+            is_paired = false;
+            current_token.clear();
+            return true;
+        };
         return b;
     }
     SetupRig() : proto(info(), backend(), [this](const std::string& line) { out.push_back(line); }) {}
@@ -969,6 +991,270 @@ struct SetupRig {
     void line(const std::string& json) { say("DCSETUP " + json + "\n"); }
     std::string last() const { return out.empty() ? "" : out.back(); }
 };
+
+static std::string hex_of(const std::array<uint8_t, 32>& d) {
+    static const char* digits = "0123456789abcdef";
+    std::string out;
+    for (uint8_t b : d) {
+        out += digits[b >> 4];
+        out += digits[b & 15];
+    }
+    return out;
+}
+
+static void test_sha256() {
+    auto h = [](const std::string& s) { return hex_of(sha256(s.data(), s.size())); };
+    CHECK_EQ(h(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK_EQ(h("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK_EQ(h(std::string(1000000, 'a')),
+             "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+    // Lengths around the 55/56/64-byte padding boundaries.
+    CHECK_EQ(h(std::string(55, 'a')), "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318");
+    CHECK_EQ(h(std::string(56, 'a')), "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a");
+    CHECK_EQ(h(std::string(64, 'a')), "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb");
+}
+
+struct AccessRig {
+    std::array<uint8_t, 32> stored{};
+    bool has_stored = false;
+    bool save_ok = true;
+    bool load_error = false;  // storage could not be read at all
+    double now = 1000;
+    uint8_t counter = 0;
+    AccessStorage storage() {
+        AccessStorage st;
+        st.load = [this](std::array<uint8_t, 32>& h) {
+            if (load_error) return LoadResult::Error;
+            if (!has_stored) return LoadResult::NotFound;
+            h = stored;
+            return LoadResult::Found;
+        };
+        st.save = [this](const std::array<uint8_t, 32>& h) {
+            if (!save_ok) return false;
+            stored = h;
+            has_stored = true;
+            return true;
+        };
+        st.erase = [this]() {
+            if (!save_ok) return false;
+            has_stored = false;
+            return true;
+        };
+        return st;
+    }
+    AccessControl make(bool enforce) {
+        return AccessControl(enforce, storage(),
+                             [this](uint8_t* out, size_t n) {
+                                 for (size_t i = 0; i < n; ++i) out[i] = uint8_t(counter + i * 7);
+                                 counter += 31;
+                             },
+                             [this]() { return now; });
+    }
+};
+
+static void test_access_control() {
+    // token_encode: URL-safe, no padding, 43 characters for 32 bytes.
+    {
+        uint8_t bytes[32];
+        for (int i = 0; i < 32; ++i) bytes[i] = uint8_t(0xF8 + (i % 8));
+        std::string t = token_encode(bytes, 32);
+        CHECK(t.size() == 43);
+        for (char c : t) CHECK(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_');
+        CHECK_EQ(token_encode(reinterpret_cast<const uint8_t*>("Man"), 3), "TWFu");
+        CHECK_EQ(token_encode(reinterpret_cast<const uint8_t*>("Ma"), 2), "TWE");
+    }
+    // Unpaired: release refuses, development allows.
+    {
+        AccessRig rig;
+        CHECK(rig.make(true).check("") == AuthResult::Unpaired);
+        CHECK(rig.make(true).required() && !rig.make(true).paired());
+        CHECK(rig.make(false).check("") == AuthResult::Allowed);
+        CHECK(rig.make(false).check("Bearer whatever") == AuthResult::Allowed);
+        CHECK(!rig.make(false).required());
+    }
+    // Paired: only the exact token passes.
+    {
+        AccessRig rig;
+        AccessControl ac = rig.make(true);
+        std::string t, t2;
+        CHECK(ac.issue(t));
+        CHECK(ac.paired() && ac.required());
+        CHECK(ac.check("Bearer " + t) == AuthResult::Allowed);
+        const std::string wrong[] = {"",           "Bearer ",      "Bearer",        "bearer " + t,
+                                     "Basic " + t, "Bearer " + t + "x", "Bearer " + t.substr(0, 42),
+                                     "Bearer  " + t, t,            "Bearer " + std::string(500, 'A')};
+        for (const auto& h : wrong) {
+            AuthResult r = ac.check(h);
+            CHECK(r == AuthResult::Unauthorized);
+        }
+        // Re-keying: the first token dies at once.
+        CHECK(ac.issue(t2));
+        CHECK(t != t2);
+        CHECK(ac.check("Bearer " + t) == AuthResult::Unauthorized);
+        CHECK(ac.check("Bearer " + t2) == AuthResult::Allowed);
+    }
+    // Lockout: ten wrong tokens in a row, then 30 s of refusing everything.
+    {
+        AccessRig rig;
+        AccessControl ac = rig.make(true);
+        std::string t;
+        CHECK(ac.issue(t));
+        for (int i = 0; i < 9; ++i) CHECK(ac.check("Bearer nope") == AuthResult::Unauthorized);
+        CHECK(ac.check("Bearer " + t) == AuthResult::Allowed);  // a correct one resets the run
+        CHECK(ac.consecutive_failures() == 0);
+        for (int i = 0; i < 10; ++i) CHECK(ac.check("Bearer nope") == AuthResult::Unauthorized);
+        CHECK(ac.check("Bearer " + t) == AuthResult::LockedOut);
+        rig.now += 29.9;
+        CHECK(ac.check("Bearer " + t) == AuthResult::LockedOut);
+        CHECK(ac.diagnostics_json().find("\"locked_out\":true") != std::string::npos);
+        rig.now += 0.3;
+        CHECK(ac.check("Bearer " + t) == AuthResult::Allowed);
+        CHECK(ac.consecutive_failures() == 0);
+        // No header at all is not a guess and does not count.
+        for (int i = 0; i < 30; ++i) CHECK(ac.check("") == AuthResult::Unauthorized);
+        CHECK(ac.check("Bearer " + t) == AuthResult::Allowed);
+    }
+    // Storage: pairing survives a restart; a failing store changes nothing.
+    {
+        AccessRig rig;
+        std::string t;
+        {
+            AccessControl ac = rig.make(true);
+            CHECK(ac.issue(t));
+        }
+        AccessControl again = rig.make(true);
+        CHECK(again.paired());
+        CHECK(again.check("Bearer " + t) == AuthResult::Allowed);
+        rig.save_ok = false;
+        std::string t2;
+        CHECK(!again.issue(t2));
+        CHECK(again.check("Bearer " + t) == AuthResult::Allowed);
+        CHECK(!again.revoke());
+        CHECK(again.paired());
+        rig.save_ok = true;
+        CHECK(again.revoke());
+        CHECK(!again.paired());
+        CHECK(again.check("Bearer " + t) == AuthResult::Unpaired);
+        CHECK(again.revoke());  // unpaired already: still ok
+        // The failure counter is RAM only: a new instance starts at 0.
+        CHECK(rig.make(true).consecutive_failures() == 0);
+    }
+    // A storage read that fails is not "unpaired": the device fails closed, even a
+    // development one, and `token` brings it back.
+    {
+        AccessRig rig;
+        rig.load_error = true;
+        AccessControl ac = rig.make(false);
+        CHECK(ac.paired());
+        CHECK(ac.check("") == AuthResult::Unauthorized);
+        CHECK(ac.check("Bearer anything") == AuthResult::Unauthorized);
+        std::string t;
+        CHECK(ac.issue(t));
+        CHECK(ac.check("Bearer " + t) == AuthResult::Allowed);
+        rig.load_error = true;
+        AccessControl again = rig.make(false);
+        CHECK(again.revoke());  // unpair works on a board whose hash cannot be read
+        CHECK(!again.paired());
+        CHECK(!rig.has_stored);
+    }
+    // Diagnostics never hold the token or its hash.
+    {
+        AccessRig rig;
+        AccessControl ac = rig.make(true);
+        std::string t;
+        CHECK(ac.issue(t));
+        ac.check("Bearer nope");
+        std::string d = ac.diagnostics_json();
+        CHECK_EQ(d, R"({"paired":true,"consecutive_failures":1,"locked_out":false})");
+        CHECK(d.find(t) == std::string::npos);
+    }
+}
+
+static void test_endpoint_auth() {
+    AccessRig rig;
+    AccessControl ac = rig.make(true);
+    Endpoint ep = make_endpoint();
+    ep.set_access_control(&ac);
+    const char* invoke_body = R"({"capability":"led.set","arguments":{"on":true}})";
+
+    // Release and unpaired: protected calls refused, nothing runs.
+    g_led_on = false;
+    Response r = ep.handle("POST", "/invoke", invoke_body);
+    CHECK(r.status == 401);
+    CHECK_EQ(r.www_authenticate, "Bearer");
+    CHECK(r.body.find("\"error\":\"Unpaired\"") != std::string::npos);
+    CHECK(!g_led_on);
+
+    std::string t;
+    CHECK(ac.issue(t));
+    const std::string bearer = "Bearer " + t;
+    // Every protected route: refused without a header, with a wrong one; passes with the right one.
+    struct Route {
+        const char* method;
+        const char* path;
+        const char* body;
+    };
+    const Route routes[] = {{"POST", "/invoke", invoke_body}, {"POST", "/self_test", ""}, {"GET", "/diagnostics", ""}};
+    for (const Route& route : routes) {
+        g_led_on = false;
+        Response none = ep.handle(route.method, route.path, route.body);
+        CHECK(none.status == 401);
+        CHECK_EQ(none.www_authenticate, "Bearer");
+        CHECK(none.body.find("\"ok\":false,\"error\":\"Unauthorized\"") != std::string::npos);
+        CHECK(none.body.find(t) == std::string::npos);
+        Response bad = ep.handle(route.method, route.path, route.body, "Bearer nope");
+        CHECK(bad.status == 401);
+        CHECK(!g_led_on);
+        Response good = ep.handle(route.method, route.path, route.body, bearer);
+        CHECK(good.status == 200);
+        CHECK(good.www_authenticate.empty());
+        if (std::string(route.path) == "/invoke") CHECK(g_led_on);
+    }
+
+    // Open routes never look at the header: a wrong token there is fine and counts for nothing.
+    for (int i = 0; i < 20; ++i) {
+        for (const char* path : {"/health", "/identity", "/manifest", "/status"}) {
+            CHECK(ep.handle("GET", path, "", "Bearer nope").status == 200);
+        }
+    }
+    CHECK(ac.consecutive_failures() == 0);
+    CHECK(ep.handle("POST", "/invoke", invoke_body, bearer).status == 200);
+
+    // Unknown paths and wrong methods stay 404, header or not.
+    CHECK(ep.handle("GET", "/nothing", "").status == 404);
+    CHECK(ep.handle("GET", "/invoke", "").status == 404);
+    CHECK(ep.handle("GET", "/self_test", "").status == 404);
+
+    // Locked out: 401 even with the right token.
+    for (int i = 0; i < 10; ++i) ep.handle("POST", "/invoke", invoke_body, "Bearer nope");
+    Response locked = ep.handle("POST", "/invoke", invoke_body, bearer);
+    CHECK(locked.status == 401);
+    CHECK(locked.body.find("\"error\":\"Unauthorized\"") != std::string::npos);
+    rig.now += 31;
+    CHECK(ep.handle("POST", "/invoke", invoke_body, bearer).status == 200);
+
+    // /identity says which state the device is in.
+    CHECK(ep.identity().find(R"("auth":{"required":true,"paired":true})") != std::string::npos);
+    CHECK(ac.revoke());
+    CHECK(ep.identity().find(R"("auth":{"required":true,"paired":false})") != std::string::npos);
+
+    // Development build, unpaired: open, and /identity says so.
+    AccessRig dev_rig;
+    AccessControl dev = dev_rig.make(false);
+    Endpoint dev_ep = make_endpoint();
+    dev_ep.set_access_control(&dev);
+    CHECK(dev_ep.handle("POST", "/invoke", invoke_body).status == 200);
+    CHECK(dev_ep.identity().find(R"("auth":{"required":false,"paired":false})") != std::string::npos);
+    std::string dt;
+    CHECK(dev.issue(dt));
+    CHECK(dev_ep.handle("POST", "/invoke", invoke_body).status == 401);  // paired dev boards enforce
+    CHECK(dev_ep.identity().find(R"("auth":{"required":true,"paired":true})") != std::string::npos);
+
+    // Without an AccessControl nothing changes (existing behaviour and identity bytes).
+    Endpoint plain = make_endpoint();
+    CHECK(plain.handle("POST", "/invoke", invoke_body).status == 200);
+    CHECK(plain.identity().find("\"auth\"") == std::string::npos);
+}
 
 static void test_setup_protocol() {
     // hello: no secret, recognises the device, reports the state.
@@ -978,7 +1264,7 @@ static void test_setup_protocol() {
         CHECK_EQ(r.last(),
                  R"(DCSETUP {"v":1,"id":7,"ok":true,"setup_protocol":1,"device_id":"camera_board_01",)"
                  R"("type":"camera_board","model":"ESP32-S3 Camera Board","firmware_version":"0.1.0+abc1234",)"
-                 R"("serial":"B8F862E96718","state":"unconfigured"})");
+                 R"("serial":"B8F862E96718","paired":false,"state":"unconfigured"})");
         r.state = WifiState::Connected;
         r.ip = "192.168.1.20";
         r.line(R"({"v":1,"id":8,"cmd":"hello"})");
@@ -988,6 +1274,51 @@ static void test_setup_protocol() {
             r.line(R"({"v":1,"id":9,"cmd":"hello"})");
             CHECK(r.last().find(std::string("\"state\":\"") + wifi_state_name(st) + "\"}") != std::string::npos);
         }
+    }
+    // token, unpair, hello.paired.
+    {
+        SetupRig r;
+        r.line(R"({"v":1,"id":20,"cmd":"token"})");
+        CHECK_EQ(r.last(), "DCSETUP {\"v\":1,\"id\":20,\"ok\":true,\"token\":\"" + r.current_token + "\"}");
+        std::string first = r.current_token;
+        r.line(R"({"v":1,"id":21,"cmd":"hello"})");
+        CHECK(r.last().find("\"serial\":\"B8F862E96718\",\"paired\":true,") != std::string::npos);
+        CHECK(r.last().find(first) == std::string::npos);
+        r.line(R"({"v":1,"id":22,"cmd":"token"})");  // re-keying replaces it
+        CHECK(r.current_token != first);
+        CHECK(r.last().find(r.current_token) != std::string::npos);
+        // The token is in exactly the two token replies and nowhere else.
+        r.line(R"({"v":1,"id":23,"cmd":"forget_wifi"})");
+        r.line(R"({"v":1,"id":24,"cmd":"nope"})");
+        int with_token = 0;
+        for (const auto& line : r.out) {
+            if (line.find("tok-") != std::string::npos) ++with_token;
+        }
+        CHECK(with_token == 2);
+        r.line(R"({"v":1,"id":25,"cmd":"hello"})");  // forget_wifi does not unpair
+        CHECK(r.last().find("\"paired\":true") != std::string::npos);
+        r.line(R"({"v":1,"id":26,"cmd":"unpair"})");
+        CHECK_EQ(r.last(), "DCSETUP {\"v\":1,\"id\":26,\"ok\":true,\"paired\":false}");
+        r.line(R"({"v":1,"id":27,"cmd":"unpair"})");  // already unpaired: still ok
+        CHECK(r.last().find("\"ok\":true") != std::string::npos);
+        r.line(R"({"v":1,"id":28,"cmd":"hello"})");
+        CHECK(r.last().find("\"paired\":false") != std::string::npos);
+    }
+    {
+        SetupRig r;
+        r.issue_ok = false;  // storage failed
+        r.line(R"({"v":1,"id":30,"cmd":"token"})");
+        CHECK(r.last().find("\"ok\":false") != std::string::npos);
+        CHECK(r.last().find("\"code\":\"internal\"") != std::string::npos);
+        CHECK(!r.is_paired);
+        SetupBackend none;  // a device with no access control at all
+        std::vector<std::string> out;
+        SetupProtocol p(SetupRig::info(), none, [&](const std::string& l) { out.push_back(l); });
+        std::string text = "DCSETUP {\"v\":1,\"id\":31,\"cmd\":\"token\"}\nDCSETUP {\"v\":1,\"id\":32,\"cmd\":\"unpair\"}\n";
+        p.feed(text.data(), text.size());
+        CHECK(out.size() == 2);
+        CHECK(out[0].find("\"code\":\"internal\"") != std::string::npos);
+        CHECK(out[1].find("\"code\":\"internal\"") != std::string::npos);
     }
     // Framing: log noise and lines without the prefix are ignored, \r\n works, a
     // line can arrive in pieces, an empty line is ignored.
@@ -1029,9 +1360,6 @@ static void test_setup_protocol() {
         r.line(R"({"v":1,"id":6})");  // no cmd
         CHECK(r.last().find("bad_request") != std::string::npos && r.last().find("\"id\":6") != std::string::npos);
         r.line(R"({"v":1,"id":6,"cmd":"reboot"})");
-        CHECK(r.last().find("unknown_command") != std::string::npos);
-        // `token` is not implemented yet (waits for the authentication decision).
-        r.line(R"({"v":1,"id":6,"cmd":"token"})");
         CHECK(r.last().find("unknown_command") != std::string::npos);
         // Unknown fields are ignored.
         r.line(R"({"v":1,"id":9,"cmd":"hello","future":true})");
@@ -1171,6 +1499,9 @@ int main() {
     test_i2c_ids();
     test_audio_analysis();
     test_setup_protocol();
+    test_sha256();
+    test_access_control();
+    test_endpoint_auth();
     if (g_failures == 0) {
         std::printf("all tests passed\n");
         return 0;

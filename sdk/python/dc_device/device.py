@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
+from .access import AccessGate
+
 CapabilityKind = Literal["sensor", "action", "stream"]
 CheckState = Literal["ok", "warning", "failed", "skipped"]
 
@@ -142,6 +144,10 @@ class Device:
     firmware_version: Optional[str] = None
     serial: Optional[str] = None
     profile: Optional[Dict[str, str]] = None  # {"id": ..., "version": ...}
+    # Access token. None = no access control (open, like a development board that is not
+    # paired). With a token, /invoke, /self_test and /diagnostics need it
+    # (docs/superpowers/specs/2026-10-20-access-token-design.md).
+    access_token: Optional[str] = field(default=None, repr=False)
     health_checks: Dict[str, HealthCheck] = field(default_factory=dict)
     self_tests: Dict[str, HealthCheck] = field(default_factory=dict)
     diagnostic_info: Dict[str, Callable[[], Any]] = field(default_factory=dict)
@@ -155,8 +161,11 @@ class Device:
     _kernel_lock: Any = field(default_factory=threading.Lock, repr=False)
     _last_self_test: Optional[Dict[str, Any]] = field(default=None, repr=False)
     _self_test_lock: Any = field(default_factory=threading.Lock, repr=False)
+    _gate: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        if self.access_token:
+            self._gate = AccessGate(self.access_token, lambda: self.clock())
         if self.profile is not None:
             if set(self.profile) != {"id", "version"} or not all(
                 isinstance(v, str) and v for v in self.profile.values()
@@ -284,7 +293,15 @@ class Device:
                 out[key] = value
         if self.profile:
             out["profile"] = dict(self.profile)
+        if self._gate is not None:
+            out["auth"] = {"required": True, "paired": True}
         return out
+
+    def check_access(self, authorization: str) -> str:
+        """"allowed", "unauthorized" or "locked" for a protected call."""
+        if self._gate is None:
+            return "allowed"
+        return self._gate.check(authorization)
 
     # --- health contract (docs/health-contract-v0.1.md) ---------------------
 

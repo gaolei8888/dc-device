@@ -114,6 +114,10 @@ void SetupProtocol::handle_line(const std::string& raw) {
         wifi(id, ssid->string, password->string);
     } else if (cmd->string == "forget_wifi") {
         forget(id);
+    } else if (cmd->string == "token") {
+        token(id);
+    } else if (cmd->string == "unpair") {
+        unpair(id);
     } else {
         reply_error(id, "unknown_command", "Unknown command.");
     }
@@ -127,6 +131,7 @@ void SetupProtocol::hello(const std::string& id) {
     out += ",\"model\":" + json::quote(info_.model);
     out += ",\"firmware_version\":" + json::quote(info_.firmware_version);
     out += ",\"serial\":" + json::quote(info_.serial);
+    out += std::string(",\"paired\":") + (backend_.paired && backend_.paired() ? "true" : "false");
     if (!info_.profile_id.empty()) {
         out += ",\"profile\":{\"id\":" + json::quote(info_.profile_id) +
                ",\"version\":" + json::quote(info_.profile_version) + "}";
@@ -193,6 +198,24 @@ void SetupProtocol::forget(const std::string& id) {
         return;
     }
     send("{\"v\":1,\"id\":" + id + ",\"ok\":true,\"state\":\"unconfigured\"}");
+}
+
+// The token is written to the reply and nowhere else: not logged, not kept.
+void SetupProtocol::token(const std::string& id) {
+    std::string token;
+    if (!backend_.issue_token || !backend_.issue_token(token)) {
+        reply_error(id, "internal", "Could not create or store the access token.");
+        return;
+    }
+    send("{\"v\":1,\"id\":" + id + ",\"ok\":true,\"token\":" + json::quote(token) + "}");
+}
+
+void SetupProtocol::unpair(const std::string& id) {
+    if (!backend_.unpair || !backend_.unpair()) {
+        reply_error(id, "internal", "Could not erase the access token.");
+        return;
+    }
+    send("{\"v\":1,\"id\":" + id + ",\"ok\":true,\"paired\":false}");
 }
 
 }  // namespace dc_device::esp32

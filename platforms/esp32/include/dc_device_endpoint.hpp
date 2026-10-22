@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "dc_device_access.hpp"
 #include "dc_device_json.hpp"
 
 namespace dc_device::esp32 {
@@ -78,8 +79,11 @@ struct Identity {
 };
 
 struct Response {
+    Response() = default;
+    Response(int status_in, std::string body_in) : status(status_in), body(std::move(body_in)) {}
     int status = 200;
     std::string body;
+    std::string www_authenticate;  // set on 401; the transport sends it as a header
 };
 
 // Transport-independent implementation of HTTP Transport v0.1
@@ -137,9 +141,16 @@ public:
     std::string self_test() const;    // health checks + self tests
     std::string diagnostics() const;  // read-only, never runs a self test
 
+    // `authorization` is the raw Authorization header value, "" if none was sent.
+    // Only POST /invoke, POST /self_test and GET /diagnostics look at it, and only when an
+    // AccessControl is set.
     Response handle(const std::string& method,
                     const std::string& target,
-                    const std::string& body) const;
+                    const std::string& body,
+                    const std::string& authorization = "") const;
+
+    // Not owned; must outlive the endpoint. Null (the default) = no access checks.
+    void set_access_control(AccessControl* access) { access_ = access; }
 
 private:
     struct NamedCheck {
@@ -152,6 +163,7 @@ private:
     std::string report(const std::vector<const NamedCheck*>& checks, std::string* status_out,
                        size_t run_first_from = static_cast<size_t>(-1)) const;
 
+    AccessControl* access_ = nullptr;
     std::string id_;
     std::string type_;
     std::string name_;

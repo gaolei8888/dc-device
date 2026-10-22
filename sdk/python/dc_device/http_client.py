@@ -6,11 +6,16 @@ from urllib.request import Request, urlopen
 
 
 class DeviceHttpClient:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, token: str | None = None):
         self.base_url = base_url.rstrip("/")
+        self._token = token
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": "Bearer " + self._token} if self._token else {}
 
     def _get(self, path: str) -> Any:
-        with urlopen(self.base_url + path, timeout=5) as response:
+        request = Request(self.base_url + path, headers=self._headers(), method="GET")
+        with urlopen(request, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _post(self, path: str, payload: dict[str, Any], timeout: float = 10) -> Any:
@@ -18,7 +23,7 @@ class DeviceHttpClient:
         request = Request(
             self.base_url + path,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **self._headers()},
             method="POST",
         )
         with urlopen(request, timeout=timeout) as response:

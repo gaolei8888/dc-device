@@ -26,6 +26,7 @@ const char* status_line(int status) {
     switch (status) {
         case 200: return "200 OK";
         case 400: return "400 Bad Request";
+        case 401: return "401 Unauthorized";
         case 404: return "404 Not Found";
         case 409: return "409 Conflict";
         case 413: return "413 Payload Too Large";
@@ -33,8 +34,11 @@ const char* status_line(int status) {
     }
 }
 
-esp_err_t send(httpd_req_t* req, int status, const std::string& body) {
+// `www_authenticate` must stay alive until the response is sent (set_hdr keeps the pointer).
+esp_err_t send(httpd_req_t* req, int status, const std::string& body,
+               const std::string& www_authenticate = "") {
     httpd_resp_set_status(req, status_line(status));
+    if (!www_authenticate.empty()) httpd_resp_set_hdr(req, "WWW-Authenticate", www_authenticate.c_str());
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body.data(), body.size());
 }
@@ -67,12 +71,26 @@ esp_err_t dispatch(httpd_req_t* req) {
     const char* method = req->method == HTTP_GET    ? "GET"
                          : req->method == HTTP_POST ? "POST"
                                                     : "";
+    // The Authorization header, if any. One too long to be a token is passed as nothing,
+    // which the endpoint refuses like a wrong token.
+    constexpr size_t kMaxAuthorization = 128;
+    std::string authorization;
+    size_t auth_len = httpd_req_get_hdr_value_len(req, "Authorization");
+    if (auth_len > 0 && auth_len <= kMaxAuthorization) {
+        authorization.assign(auth_len + 1, '\0');
+        if (httpd_req_get_hdr_value_str(req, "Authorization", &authorization[0], authorization.size()) == ESP_OK) {
+            authorization.resize(auth_len);
+        } else {
+            authorization.clear();
+        }
+    }
+
     // One request at a time, and never while the watchdog is acting.
     auto lock = static_cast<SemaphoreHandle_t>(ctx->lock);
     xSemaphoreTake(lock, portMAX_DELAY);
-    Response response = ctx->endpoint->handle(method, req->uri, body);
+    Response response = ctx->endpoint->handle(method, req->uri, body, authorization);
     xSemaphoreGive(lock);
-    return send(req, response.status, response.body);
+    return send(req, response.status, response.body, response.www_authenticate);
 }
 
 struct TickArgs {

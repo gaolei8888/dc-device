@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <string>
 
+#include "dc_device_access_nvs.hpp"
 #include "dc_device_i2c_detect.hpp"
 #include "dc_device_mic_detect.hpp"
 #include "dc_device_pin_survey.hpp"
@@ -392,6 +393,21 @@ extern "C" void app_main() {
     dc_device::esp32::register_chip_diagnostics(endpoint);
     endpoint.add_diagnostic("free_heap_bytes", [] { return std::to_string(esp_get_free_heap_size()); });
 
+    // Access token: a release board refuses protected calls until it is paired over the
+    // USB cable; a development board stays open until then (docs/superpowers/specs/
+    // 2026-10-20-access-token-design.md). Needs NVS, so it is made here, after nvs_flash_init.
+#if CONFIG_DC_DEVICE_RELEASE
+    constexpr bool kRefuseWhenUnpaired = true;
+#else
+    constexpr bool kRefuseWhenUnpaired = false;
+#endif
+    static dc_device::esp32::AccessControl access(
+        kRefuseWhenUnpaired, dc_device::esp32::make_nvs_access_storage(),
+        dc_device::esp32::hardware_random,
+        [] { return static_cast<double>(esp_timer_get_time()) / 1e6; });
+    endpoint.set_access_control(&access);
+    endpoint.add_diagnostic("auth", [] { return access.diagnostics_json(); });
+
     if (!endpoint.validate_safety()) {
         ESP_LOGE(TAG, "Time-limited capability without a safe state; not serving");
         return;
@@ -414,7 +430,11 @@ extern "C" void app_main() {
 
     // USB setup: serves hello / wifi / forget_wifi on the console port in every
     // network state. Needs no network to answer.
-    static dc_device::esp32::SetupProtocol setup(setup_info, wifi_manager.backend(http_config.port),
+    dc_device::esp32::SetupBackend setup_backend = wifi_manager.backend(http_config.port);
+    setup_backend.paired = [] { return access.paired(); };
+    setup_backend.issue_token = [](std::string& token) { return access.issue(token); };
+    setup_backend.unpair = [] { return access.revoke(); };
+    static dc_device::esp32::SetupProtocol setup(setup_info, setup_backend,
                                                  dc_device::esp32::write_setup_line);
     dc_device::esp32::start_setup_console(setup);
 }

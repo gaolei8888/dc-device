@@ -23,6 +23,21 @@ class DeviceRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
 
+    def _refuse_unless_authorised(self) -> bool:
+        """True if the call may go ahead; otherwise the 401 has been sent."""
+        if self.device.check_access(self.headers.get("Authorization", "")) == "allowed":
+            return True
+        body = json.dumps(
+            {"ok": False, "error": "Unauthorized", "message": "Missing or wrong access token."}
+        ).encode("utf-8")
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", "Bearer")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def do_GET(self) -> None:
         if self.device is None:
             self._send_json(500, {"error": "device_not_configured"})
@@ -47,6 +62,8 @@ class DeviceRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/diagnostics":
+            if not self._refuse_unless_authorised():
+                return
             self._send_json(200, self.device.diagnostics())
             return
 
@@ -58,6 +75,8 @@ class DeviceRequestHandler(BaseHTTPRequestHandler):
             return
 
         path = urlparse(self.path).path
+        if path in ("/self_test", "/invoke") and not self._refuse_unless_authorised():
+            return
         if path == "/self_test":
             try:
                 self._send_json(200, self.device.self_test())

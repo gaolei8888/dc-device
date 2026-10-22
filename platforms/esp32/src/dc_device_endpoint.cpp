@@ -263,6 +263,10 @@ std::string Endpoint::identity() const {
         out += ",\"profile\":{\"id\":" + json::quote(identity_.profile_id) +
                ",\"version\":" + json::quote(identity_.profile_version) + "}";
     }
+    if (access_ != nullptr) {
+        out += std::string(",\"auth\":{\"required\":") + (access_->required() ? "true" : "false") +
+               ",\"paired\":" + (access_->paired() ? "true" : "false") + "}";
+    }
     out += "}";
     return out;
 }
@@ -432,8 +436,29 @@ std::string Endpoint::manifest() const {
 
 Response Endpoint::handle(const std::string& method,
                           const std::string& target,
-                          const std::string& body) const {
+                          const std::string& body,
+                          const std::string& authorization) const {
     std::string path = target.substr(0, target.find('?'));
+
+    const bool protected_route = (method == "POST" && (path == "/invoke" || path == "/self_test")) ||
+                                 (method == "GET" && path == "/diagnostics");
+    if (protected_route && access_ != nullptr) {
+        switch (access_->check(authorization)) {
+            case AuthResult::Allowed:
+                break;
+            case AuthResult::Unpaired: {
+                Response r = error_response(401, "Unpaired",
+                                            "This device has no access token yet. Pair it with the USB cable.");
+                r.www_authenticate = "Bearer";
+                return r;
+            }
+            default: {
+                Response r = error_response(401, "Unauthorized", "Missing or wrong access token.");
+                r.www_authenticate = "Bearer";
+                return r;
+            }
+        }
+    }
 
     // Unknown paths and wrong methods both answer 404, matching the Python
     // reference server.
