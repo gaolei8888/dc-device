@@ -64,14 +64,40 @@ The same capability should work over HTTP, WebSocket, MQTT, serial, or another t
 
 ## Security
 
-v0.1 is for local development only.
+### Authentication (access token)
 
-Before remote or production use, the transport must add:
+Calls that act on the device or read its details need an access token:
+`POST /invoke`, `POST /self_test`, `GET /diagnostics`. `GET /health`, `/identity`,
+`/manifest` and `/status` are open and never look at the `Authorization` header: a wrong
+token sent to them is answered normally and counts for nothing.
 
-- device identity
-- authentication
-- authorization
+- The token is 32 random bytes written as 43 URL-safe base64 characters, sent as
+  `Authorization: Bearer <token>`.
+- It is obtained only over the USB cable (`token` command,
+  `usb-setup-protocol-v0.1.md`). Someone who has only network access cannot get one.
+  Pairing again with the cable replaces the token; the old one stops working at once.
+- The device keeps a SHA-256 hash of the token and compares in constant time. The token
+  never appears in any HTTP reply, `/diagnostics` or log.
+- Missing or wrong token: `401`, header `WWW-Authenticate: Bearer`, body
+  `{"ok":false,"error":"Unauthorized","message":"..."}`; nothing is executed. A release
+  build with no token set answers `401` with error `Unpaired`; a development build with no
+  token set allows the call.
+- Ten wrong tokens in a row: every protected call answers `401 Unauthorized` for the next
+  30 seconds, without looking at the token. A request with no header at all does not
+  count. The lockout is global, so a hostile neighbour can slow the owner down; this is
+  accepted. The counter is kept in memory only and is shown in `/diagnostics`.
+- `GET /identity` carries `"auth":{"required":bool,"paired":bool}` so a host can see
+  before it calls whether it must pair. Devices with no access control omit it.
+
+Limits of this step: HTTP is still cleartext, so the token can be read off the local
+network by someone on it and looking. It keeps out casual and unintended access, not a
+determined attacker on the same Wi-Fi. Authentication says who may call a capability, not
+whether the call is safe; `safety-semantics-v0.1.md` applies unchanged.
+
+### Still to add before remote or production use
+
+- authorization (roles, scopes)
 - replay protection where appropriate
 - TLS or a trusted local tunnel
-- rate limits
+- rate limits beyond the lockout
 - audit logging

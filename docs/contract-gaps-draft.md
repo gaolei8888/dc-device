@@ -37,8 +37,8 @@ Each item says what is missing, why, and whether `ROADMAP.md` already lists it.
 
 | # | Gap | Why | Roadmap |
 |---|---|---|---|
-| 15 | Authentication; `/identity` is unauthenticated and exposes MAC as `serial` | v0.1 is local-dev only | yes (v0.3) |
-| 16 | Pairing with physical confirmation; afterwards only the paired key is trusted | Muse community pairing v5 needs a button press | no |
+| 15 | Authentication; `/identity` is unauthenticated and exposes MAC as `serial` | **Partly closed** (access token, `http-transport-v0.1.md` "Authentication"): protected calls need `Authorization: Bearer`. Still open: `/identity` stays open by design, HTTP is cleartext (TLS), no scopes | yes (v0.3) |
+| 16 | Pairing with physical confirmation; afterwards only the paired key is trusted | **Closed for the cable**: the token is issued only over the USB cable (`usb-setup-protocol-v0.1.md`, `token`), no button; pairing again replaces it | no |
 | 17 | Discovery primitives (mDNS or similar) | Endpoints are configured by hand today | yes (open) |
 | 18 | Optional device-initiated outbound session | Muse: device dials the agent over Noise, which works behind NAT. DCO docs say "dct connects out". **Direction is undecided** | no |
 | 19 | Events / streams over WebSocket | Otherwise only polling | yes |

@@ -43,6 +43,16 @@
         "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
       },
       "additionalProperties": false
+    },
+    "auth": {
+      "description": "Access token state (http-transport-v0.1.md, Authentication). Absent on a device with no access control. `required`: protected calls need a token right now. `paired`: a token has been issued.",
+      "type": "object",
+      "required": ["required", "paired"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "paired": { "type": "boolean" }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": true

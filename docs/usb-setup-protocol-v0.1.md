@@ -2,7 +2,9 @@
 
 Status: draft. `hello`, `wifi` and `forget_wifi` are implemented in the
 `camera_board` example (see "Implementation" at the end) and covered by host
-tests. **Nothing has been run on a board yet.** `token` is not implemented.
+tests; `wifi` and `forget_wifi` have been run on a board. `token`, `unpair` and
+`hello.paired` are implemented in the same example and covered by host tests; they
+have not been run on a board yet.
 
 Purpose: the first time a device is connected, a host application (DC Desktop)
 gives it Wi-Fi credentials over the USB cable. After that the cable only
@@ -95,6 +97,7 @@ Response fields:
 | `setup_protocol` | Highest protocol version the device speaks (integer). |
 | `device_id`, `type`, `model`, `firmware_version` | As in `GET /identity`. |
 | `serial` | The hardware serial, the MAC without separators in upper case. Same value as `/identity`. |
+| `paired` | `true` if an access token is set (`token`), else `false`. |
 | `profile` | `{ "id", "version" }` if the device declares one. |
 | `state` | `unconfigured`, `connecting`, `connected` or `offline` (see "Device states"). |
 | `port` | The HTTP port, when `state` is `connected`. |
@@ -148,18 +151,24 @@ credentials, stops the HTTP server and moves to `unconfigured`. Response:
 
 ### `token`
 
-**Pending gap 15.** The shape below is a placeholder and must not be
-implemented until the authentication scheme is decided (header name, scope,
-revocation, whether `/identity` stays unauthenticated).
+Request: `{"v":1,"id":4,"cmd":"token"}`. The device generates a new access token, stores
+only its SHA-256 hash, replaces any previous token (which stops working at once) and
+returns the token once: `{"v":1,"id":4,"ok":true,"token":"..."}`. It is never logged and
+never repeated. Error: `internal` if the token could not be stored (the previous token
+then still works).
 
-Request: `{"v":1,"id":4,"cmd":"token"}`. The device generates a new access
-token, stores it, replaces any previous one (which stops working) and returns
-it once: `{"ok":true,"token":"..."}`. Receiving a token over the cable is the
-physical-presence pairing step for gap 16. It is not a button press, but it
-requires holding the device.
+Receiving a token over the cable is the physical-presence pairing step. It needs no
+button press: whoever holds the board and a cable owns it, the same as for Wi-Fi settings,
+so pairing again (lost token, new computer) is the same command. See the token use in
+`http-transport-v0.1.md`, "Authentication". v0.1 HTTP is cleartext, so the token can be
+read off the local network; it keeps out casual access, not an attacker on the network.
 
-Note that v0.1 HTTP is cleartext, so the token can be read off the local
-network. It keeps out casual access, not an attacker on the same network.
+### `unpair`
+
+Request: `{"v":1,"id":5,"cmd":"unpair"}`. Erases the stored token hash; the device returns
+to "no token set". Response: `{"v":1,"id":5,"ok":true,"paired":false}`, also when it was
+not paired. Error: `internal` if the erase failed. For a board that is sold, returned or
+reused. `forget_wifi` does not touch the token.
 
 ## Timeouts
 
@@ -167,7 +176,7 @@ The device always answers, so the host can tell "failed" from "silent".
 
 | Command | Device gives up after | Host should wait at most |
 |---|---|---|
-| `hello`, `forget_wifi`, `token` | 2 s | 4 s |
+| `hello`, `forget_wifi`, `token`, `unpair` | 2 s | 4 s |
 | `wifi` | 20 s | 25 s |
 
 When the device gives up it answers `timeout`. If the host gets nothing within
@@ -248,7 +257,6 @@ decision. These points come from how ESP32 USB behaves.
 
 ## Open items
 
-- `token`: waits for gap 15 and, for the pairing meaning, gap 16.
 - Where firmware images are distributed from is undecided. How one is built is not:
   `scripts/build-release.sh` (see "Implementation").
 - Flash and NVS layout: decided for the first implementation, namespace `dcsetup`,
@@ -281,8 +289,10 @@ tested, `tests/esp32/run.sh`); Wi-Fi in `dc_device_wifi_manager.cpp`; the serial
 reader in `dc_device_setup_console.cpp`; wired up in
 `examples/esp32/camera_board/main/main.cpp`.
 
-- Commands: `hello`, `wifi`, `forget_wifi`. `token` answers `unknown_command` until
-  gap 15 is decided. HTTP has no authentication and is unchanged.
+- Commands: `hello`, `wifi`, `forget_wifi`, `token`, `unpair`. Token store: NVS
+  namespace `dcauth`, key `hash` (SHA-256 of the token, never the token). Release
+  builds (`CONFIG_DC_DEVICE_RELEASE`) refuse protected HTTP calls until paired;
+  development builds are open until paired.
 - Serial input: the UART console only (a board with a USB-to-serial chip, such as the
   CH343 boards). On a build whose console is the chip's native USB the firmware logs
   that setup is unavailable. That path is not written.
