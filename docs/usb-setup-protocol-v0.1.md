@@ -161,13 +161,30 @@ requires holding the device.
 Note that v0.1 HTTP is cleartext, so the token can be read off the local
 network. It keeps out casual access, not an attacker on the same network.
 
+### `parts`
+
+Request: `{"v":1,"id":5,"cmd":"parts"}`. Lists the parts a person can declare on this device
+and whether each is declared: `{"v":1,"id":5,"ok":true,"parts":[{"name":"speaker","declared":false},{"name":"screen","declared":false}]}`.
+A device with nothing to declare answers `"parts":[]`.
+
+### `declare`
+
+Request: `{"v":1,"id":6,"cmd":"declare","part":"screen","present":true}`. Records that a
+person sees the part on the board (`present: true`) or does not (`false`). Response:
+`{"v":1,"id":6,"ok":true,"part":"screen","present":true}`. The device then declares the
+capabilities of that part in `/manifest` unless its own checks find the part absent or broken
+(`self-check-v0.1.md`, "Declaring capabilities"). Errors: `bad_request` (`part` not a string or
+`present` not a boolean), `unknown_part` (the device has no part by that name, including a
+device with nothing to declare), `internal` (the answer could not be stored; nothing changed).
+It needs the cable, not the network. It does not change Wi-Fi settings.
+
 ## Timeouts
 
 The device always answers, so the host can tell "failed" from "silent".
 
 | Command | Device gives up after | Host should wait at most |
 |---|---|---|
-| `hello`, `forget_wifi`, `token` | 2 s | 4 s |
+| `hello`, `forget_wifi`, `token`, `parts`, `declare` | 2 s | 4 s |
 | `wifi` | 20 s | 25 s |
 
 When the device gives up it answers `timeout`. If the host gets nothing within
@@ -281,7 +298,7 @@ tested, `tests/esp32/run.sh`); Wi-Fi in `dc_device_wifi_manager.cpp`; the serial
 reader in `dc_device_setup_console.cpp`; wired up in
 `examples/esp32/camera_board/main/main.cpp`.
 
-- Commands: `hello`, `wifi`, `forget_wifi`. `token` answers `unknown_command` until
+- Commands: `hello`, `wifi`, `forget_wifi`, `parts`, `declare`. `token` answers `unknown_command` until
   gap 15 is decided. HTTP has no authentication and is unchanged.
 - Serial input: the UART console only (a board with a USB-to-serial chip, such as the
   CH343 boards). On a build whose console is the chip's native USB the firmware logs

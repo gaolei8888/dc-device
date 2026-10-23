@@ -10,7 +10,11 @@ Returns liveness and device identity.
 
 ### GET /manifest
 
-Returns the Device Capability Manifest.
+Returns the Device Capability Manifest: the capabilities declared right now. A device may
+leave out a capability whose part it has no evidence for, and the list can change while the
+device runs (see `self-check-v0.1.md`, "Declaring capabilities"); a host re-reads it after a
+self-test or after it declared a part. `POST /invoke` of a capability that is not declared
+answers 404 `UnknownCapability`.
 
 ### GET /identity
 

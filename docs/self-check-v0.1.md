@@ -110,6 +110,35 @@ a host can show it and a developer can add it to the known maps.
 - Discovered wiring belongs in `/diagnostics` under a named key so a management UI
   can show it without parsing check messages.
 
+## Declaring capabilities
+
+`/manifest` lists what the firmware has evidence is on the board. It is not a list of what
+the firmware's source code knows how to drive. A capability that exercises a part is
+**declared** when:
+
+- the self-check observed the part working (verdict `ok`; for example the speaker, when the
+  microphone heard the tone it played), or
+- a person said the part is there (see below) and the self-check has not found it absent or
+  broken (`not_found` or `failed` beats the declaration; `unverified` and not yet run do not).
+
+Otherwise the capability is left out of `/manifest` and `/invoke` refuses it exactly like an
+unknown name (404 `UnknownCapability`), so it cannot run. `capability_count` in `/diagnostics`
+counts declared capabilities only. Capabilities that need no part (`heap.read`) are always
+declared.
+
+Why a person: a screen and a speaker without a microphone give nothing back, so no software
+can tell "absent" from "present". Guessing from a pin table is what made a board with only a
+camera claim a speaker and a screen. The person says so over the USB cable
+(`usb-setup-protocol-v0.1.md`, `declare`), which needs the board in hand, not the network.
+The answer is kept in NVS (namespace `dcparts`) and survives restarts. A board that is sold
+or reused clears it with `declare ... "present": false`.
+
+The manifest can change while the board runs (a self-test hears the speaker; a person
+declares a screen). A host re-reads `/manifest` after a self-test or after it declared a part,
+and does not cache it for the life of a connection. On the camera_board example today the
+declarable parts are `speaker` and `screen`; the camera will join the same rule when a
+capture capability exists (declared only after a frame was really taken).
+
 ## Servos and motors
 
 Required parts of the self-check. They move, so they have rules the other tests do
