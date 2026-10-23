@@ -38,6 +38,11 @@ know what a device of this class should look like.
 - Identity does not depend on health: it answers even when `/status` is
   `failed`.
 
+**Matching a USB reply to a network device.** `serial` is the same string in the USB `hello`
+and in `/identity`; a host normalizes and compares it as described in
+`p0-device-evidence-v0.1.md`, "The matching rule". The USB-to-serial chip's own serial number
+is not the device's serial.
+
 **Identity is a claim, not proof.** There is no signature or authentication
 in v0.1; anyone on the network can read it, and the MAC in `serial` is
 visible to them. Authentication is the separate "device identity /
