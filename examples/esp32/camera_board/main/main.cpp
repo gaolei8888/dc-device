@@ -9,7 +9,9 @@
 #include <cstdio>
 #include <string>
 
+#include "dc_device_declared_parts.hpp"
 #include "dc_device_i2c_detect.hpp"
+#include "dc_device_parts_nvs.hpp"
 #include "dc_device_mic_detect.hpp"
 #include "dc_device_pin_survey.hpp"
 #include <vector>
@@ -232,6 +234,13 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    // Parts nothing on the board can observe are declared in /manifest only when the
+    // self-check saw them working or a person said, over the USB cable, that they are
+    // there (docs/self-check-v0.1.md, "Declaring capabilities"). Needs NVS, so it is made here.
+    const std::vector<std::string> declarable = {"speaker", "screen"};
+    static dc_device::esp32::DeclaredParts declared_parts(
+        declarable, dc_device::esp32::make_nvs_part_storage(declarable));
+
     // Tests that need a person: they make a sound or light the screen, and nothing
     // on the board can observe the result.
     dc_device::esp32::CapabilitySpec bp;
@@ -244,6 +253,7 @@ extern "C" void app_main() {
         return beep(880, 300, 2000) ? InvokeResult::success(R"({"played":true})")
                                     : InvokeResult::failed("Could not start the speaker output");
     };
+    bp.available = dc_device::esp32::available_when_confirmed(self_check, "speaker", declared_parts);
     endpoint.add(bp);
     dc_device::esp32::CapabilitySpec sc;
     sc.name = "screen.fill_test";
@@ -255,6 +265,7 @@ extern "C" void app_main() {
         return screen_test() ? InvokeResult::success(R"({"drawn":true})")
                              : InvokeResult::failed("Could not drive the screen (" + g_screen_error + ")");
     };
+    sc.available = dc_device::esp32::available_when_confirmed(self_check, "screen", declared_parts);
     endpoint.add(sc);
 
 #if !CONFIG_DC_DEVICE_RELEASE
@@ -414,7 +425,15 @@ extern "C" void app_main() {
 
     // USB setup: serves hello / wifi / forget_wifi on the console port in every
     // network state. Needs no network to answer.
-    static dc_device::esp32::SetupProtocol setup(setup_info, wifi_manager.backend(http_config.port),
-                                                 dc_device::esp32::write_setup_line);
+    dc_device::esp32::SetupBackend setup_backend = wifi_manager.backend(http_config.port);
+    setup_backend.parts = [] { return declared_parts.list(); };
+    setup_backend.declare_part = [](const std::string& part, bool present) {
+        switch (declared_parts.set(part, present)) {
+            case dc_device::esp32::DeclaredParts::SetResult::Ok: return dc_device::esp32::PartResult::Ok;
+            case dc_device::esp32::DeclaredParts::SetResult::UnknownPart: return dc_device::esp32::PartResult::UnknownPart;
+            default: return dc_device::esp32::PartResult::Failed;
+        }
+    };
+    static dc_device::esp32::SetupProtocol setup(setup_info, setup_backend, dc_device::esp32::write_setup_line);
     dc_device::esp32::start_setup_console(setup);
 }

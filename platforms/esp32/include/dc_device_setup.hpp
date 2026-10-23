@@ -6,6 +6,10 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
+
+#include "dc_device_json.hpp"
 
 namespace dc_device::esp32 {
 
@@ -37,6 +41,8 @@ struct WifiOutcome {
     std::string ip;  // set when ok
 };
 
+enum class PartResult { Ok, UnknownPart, Failed };
+
 struct SetupBackend {
     std::function<WifiState()> state;
     std::function<std::string()> ip;  // current address; empty if none
@@ -51,6 +57,11 @@ struct SetupBackend {
         start_wifi;
     // Erases stored credentials and stops serving HTTP. Returns false on failure.
     std::function<bool()> forget_wifi;
+    // Parts that nothing on the board can observe and that a person can declare present
+    // (docs/self-check-v0.1.md, "Declaring capabilities"). Empty = none: `parts` answers an
+    // empty list and `declare` answers unknown_part.
+    std::function<std::vector<std::pair<std::string, bool>>()> parts;  // name, declared
+    std::function<PartResult(const std::string& part, bool present)> declare_part;
 };
 
 constexpr size_t kSetupMaxLine = 512;  // including the "DCSETUP " prefix
@@ -74,6 +85,8 @@ private:
     void hello(const std::string& id);
     void wifi(const std::string& id, const std::string& ssid, const std::string& password);
     void forget(const std::string& id);
+    void parts(const std::string& id);
+    void declare(const std::string& id, const json::Value& request);
 
     SetupInfo info_;
     SetupBackend backend_;

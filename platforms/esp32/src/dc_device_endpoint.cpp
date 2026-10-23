@@ -398,9 +398,17 @@ std::string Endpoint::diagnostics() const {
                           std::chrono::steady_clock::now() - started_).count();
     return "{\"device_id\":" + json::quote(id_) + ",\"status\":\"" + status +
            "\",\"uptime_s\":" + json::number(uptime_s) +
-           ",\"capability_count\":" + std::to_string(capabilities_.size()) +
+           ",\"capability_count\":" + std::to_string(declared_count()) +
            ",\"last_self_test\":" + (last_self_test_.empty() ? "null" : last_self_test_) +
            ",\"info\":{" + info + "}}";
+}
+
+size_t Endpoint::declared_count() const {
+    size_t n = 0;
+    for (const auto& cap : capabilities_) {
+        if (declared(cap)) ++n;
+    }
+    return n;
 }
 
 std::string Endpoint::manifest() const {
@@ -409,11 +417,14 @@ std::string Endpoint::manifest() const {
     out += ",\"type\":" + json::quote(type_);
     out += ",\"name\":" + json::quote(name_);
     out += ",\"metadata\":{}},\"capabilities\":[";
+    bool first_declared = true;
     for (size_t i = 0; i < capabilities_.size(); ++i) {
         const auto& cap = capabilities_[i];
-        if (i > 0) {
+        if (!declared(cap)) continue;
+        if (!first_declared) {
             out += ',';
         }
+        first_declared = false;
         out += "{\"name\":" + json::quote(cap.name);
         out += ",\"description\":" + json::quote(cap.description);
         out += ",\"kind\":" + json::quote(cap.kind);
@@ -494,7 +505,7 @@ Response Endpoint::invoke(const std::string& body) const {
 
     for (size_t index = 0; index < capabilities_.size(); ++index) {
         const auto& cap = capabilities_[index];
-        if (cap.name != capability->string) {
+        if (cap.name != capability->string || !declared(cap)) {
             continue;
         }
         std::string invalid = validate_arguments(cap.parameters_json, *arguments);

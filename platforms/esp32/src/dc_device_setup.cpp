@@ -114,6 +114,10 @@ void SetupProtocol::handle_line(const std::string& raw) {
         wifi(id, ssid->string, password->string);
     } else if (cmd->string == "forget_wifi") {
         forget(id);
+    } else if (cmd->string == "parts") {
+        parts(id);
+    } else if (cmd->string == "declare") {
+        declare(id, request);
     } else {
         reply_error(id, "unknown_command", "Unknown command.");
     }
@@ -193,6 +197,38 @@ void SetupProtocol::forget(const std::string& id) {
         return;
     }
     send("{\"v\":1,\"id\":" + id + ",\"ok\":true,\"state\":\"unconfigured\"}");
+}
+
+void SetupProtocol::parts(const std::string& id) {
+    std::string list;
+    if (backend_.parts) {
+        for (const auto& part : backend_.parts()) {
+            if (!list.empty()) list += ',';
+            list += "{\"name\":" + json::quote(part.first) + ",\"declared\":" + (part.second ? "true" : "false") + "}";
+        }
+    }
+    send("{\"v\":1,\"id\":" + id + ",\"ok\":true,\"parts\":[" + list + "]}");
+}
+
+void SetupProtocol::declare(const std::string& id, const json::Value& request) {
+    const json::Value* part = request.find("part");
+    const json::Value* present = request.find("present");
+    if (part == nullptr || !part->is_string() || present == nullptr || !present->is_bool()) {
+        reply_error(id, "bad_request", "\"part\" must be a string and \"present\" a boolean.");
+        return;
+    }
+    PartResult result = backend_.declare_part ? backend_.declare_part(part->string, present->boolean)
+                                              : PartResult::UnknownPart;
+    if (result == PartResult::UnknownPart) {
+        reply_error(id, "unknown_part", "This device has no part with that name to declare.");
+        return;
+    }
+    if (result == PartResult::Failed) {
+        reply_error(id, "internal", "Could not store the answer.");
+        return;
+    }
+    send("{\"v\":1,\"id\":" + id + ",\"ok\":true,\"part\":" + json::quote(part->string) +
+         ",\"present\":" + (present->boolean ? "true" : "false") + "}");
 }
 
 }  // namespace dc_device::esp32

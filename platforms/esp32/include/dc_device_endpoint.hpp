@@ -41,6 +41,11 @@ struct CapabilitySpec {
     std::string returns_json = "{}";          // JSON Schema object
     std::string safety_json = "{}";           // JSON object
     CapabilityHandler handler;
+    // Whether the capability is declared right now. Empty = always. A capability that
+    // is not declared is left out of /manifest and refused like an unknown name, so an
+    // AI is never offered a part the firmware has no evidence is there
+    // (docs/self-check-v0.1.md, "Declaring capabilities"). Called from the HTTP task.
+    std::function<bool()> available = nullptr;
 };
 
 // Outcome of one health check (docs/health-contract-v0.1.md).
@@ -148,6 +153,8 @@ private:
     };
 
     Response invoke(const std::string& body) const;
+    size_t declared_count() const;
+    static bool declared(const CapabilitySpec& cap) { return !cap.available || cap.available(); }
     bool name_taken(const std::string& name) const;
     std::string report(const std::vector<const NamedCheck*>& checks, std::string* status_out,
                        size_t run_first_from = static_cast<size_t>(-1)) const;

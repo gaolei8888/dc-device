@@ -8,6 +8,7 @@ ${CXX:-c++} -std=c++17 -Wall -Wextra -Werror \
     -Iplatforms/esp32/include \
     tests/esp32/test_endpoint.cpp \
     platforms/esp32/src/dc_device_endpoint.cpp \
+    platforms/esp32/src/dc_device_declared_parts.cpp \
     platforms/esp32/src/dc_device_setup.cpp \
     platforms/esp32/src/dc_device_json.cpp \
     platforms/esp32/src/dc_device_chip.cpp \

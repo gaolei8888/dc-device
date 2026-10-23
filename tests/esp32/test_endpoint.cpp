@@ -4,10 +4,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <string>
 
 #include "dc_device_audio_analysis.hpp"
 #include "dc_device_chip.hpp"
+#include "dc_device_declared_parts.hpp"
 #include "dc_device_endpoint.hpp"
 #include "dc_device_i2c_ids.hpp"
 #include "dc_device_pins.hpp"
@@ -928,6 +930,8 @@ struct SetupRig {
     std::function<void(const std::string&)> progress_cb;
     std::string seen_ssid, seen_password;
     int wifi_calls = 0;
+    std::vector<std::pair<std::string, bool>> part_flags = {{"screen", false}, {"speaker", false}};
+    bool part_store_ok = true;
     SetupProtocol proto;
 
     static SetupInfo info() {
@@ -962,6 +966,16 @@ struct SetupRig {
             ++forgets;
             return forget_ok;
         };
+        b.parts = [this] { return part_flags; };
+        b.declare_part = [this](const std::string& name, bool present) {
+            for (auto& p : part_flags) {
+                if (p.first != name) continue;
+                if (!part_store_ok) return PartResult::Failed;
+                p.second = present;
+                return PartResult::Ok;
+            }
+            return PartResult::UnknownPart;
+        };
         return b;
     }
     SetupRig() : proto(info(), backend(), [this](const std::string& line) { out.push_back(line); }) {}
@@ -969,6 +983,155 @@ struct SetupRig {
     void line(const std::string& json) { say("DCSETUP " + json + "\n"); }
     std::string last() const { return out.empty() ? "" : out.back(); }
 };
+
+static void test_capability_availability() {
+    Endpoint ep("board_01", "camera_board", "Board");
+    bool screen_here = false;
+    CapabilitySpec heap;
+    heap.name = "heap.read";
+    heap.description = "Read the free heap size.";
+    heap.kind = "sensor";
+    heap.handler = [](const json::Value&) { return InvokeResult::success("{\"free_heap_bytes\":1}"); };
+    CHECK(ep.add(heap));
+    CapabilitySpec screen;
+    screen.name = "screen.fill_test";
+    screen.description = "Fill the screen.";
+    screen.kind = "action";
+    int fills = 0;
+    screen.handler = [&](const json::Value&) {
+        ++fills;
+        return InvokeResult::success("{\"drawn\":true}");
+    };
+    screen.available = [&] { return screen_here; };
+    CHECK(ep.add(screen));
+    const char* call = R"({"capability":"screen.fill_test","arguments":{}})";
+
+    // Not declared: absent from the manifest, refused like an unknown name, never run.
+    auto names = [&] {
+        json::Value m;
+        std::string err;
+        CHECK(json::parse(ep.manifest(), m, err));
+        std::string out;
+        for (const auto& c : m.find("capabilities")->items) out += c.find("name")->string + ";";
+        return out;
+    };
+    CHECK_EQ(names(), "heap.read;");
+    Response r = ep.handle("POST", "/invoke", call);
+    CHECK(r.status == 404);
+    CHECK(r.body.find("UnknownCapability") != std::string::npos);
+    CHECK(fills == 0);
+    CHECK(ep.diagnostics().find("\"capability_count\":1") != std::string::npos);
+
+    // It becomes declared when the part is confirmed, and the manifest follows at once.
+    screen_here = true;
+    CHECK_EQ(names(), "heap.read;screen.fill_test;");
+    CHECK(ep.handle("POST", "/invoke", call).status == 200);
+    CHECK(fills == 1);
+    CHECK(ep.diagnostics().find("\"capability_count\":2") != std::string::npos);
+
+    // And goes away again if the evidence does.
+    screen_here = false;
+    CHECK_EQ(names(), "heap.read;");
+    CHECK(ep.handle("POST", "/invoke", call).status == 404);
+    CHECK(fills == 1);
+
+    // First capability undeclared: the manifest list stays valid JSON.
+    Endpoint ep2("b", "t", "n");
+    CapabilitySpec first = screen;
+    first.available = [] { return false; };
+    CHECK(ep2.add(first));
+    CHECK(ep2.add(heap));
+    json::Value m2;
+    std::string err2;
+    CHECK(json::parse(ep2.manifest(), m2, err2));
+    CHECK(m2.find("capabilities")->items.size() == 1);
+}
+
+struct PartsRig {
+    std::map<std::string, bool> stored;
+    bool save_ok = true;
+    PartStorage storage() {
+        PartStorage st;
+        st.load = [this] { return stored; };
+        st.save = [this](const std::string& part, bool present) {
+            if (!save_ok) return false;
+            stored[part] = present;
+            return true;
+        };
+        return st;
+    }
+};
+
+static void test_declared_parts() {
+    PartsRig rig;
+    DeclaredParts parts({"screen", "speaker"}, rig.storage());
+    CHECK(!parts.declared("screen"));
+    CHECK(parts.set("screen", true) == DeclaredParts::SetResult::Ok);
+    CHECK(parts.declared("screen") && !parts.declared("speaker"));
+    CHECK(parts.set("camera", true) == DeclaredParts::SetResult::UnknownPart);
+    CHECK(!parts.declared("camera"));
+    CHECK(rig.stored.count("camera") == 0);
+    // Survives a restart; a failing store changes nothing.
+    DeclaredParts again({"screen", "speaker"}, rig.storage());
+    CHECK(again.declared("screen"));
+    rig.save_ok = false;
+    CHECK(again.set("speaker", true) == DeclaredParts::SetResult::StorageFailed);
+    CHECK(!again.declared("speaker"));
+    rig.save_ok = true;
+    CHECK(again.set("screen", false) == DeclaredParts::SetResult::Ok);
+    CHECK(!again.declared("screen"));
+    // list(): every known part, in order, with its flag.
+    auto l = again.list();
+    CHECK(l.size() == 2 && l[0].first == "screen" && !l[0].second && l[1].first == "speaker");
+    // A stored part this firmware does not know is ignored.
+    rig.stored["ghost"] = true;
+    DeclaredParts third({"screen"}, rig.storage());
+    CHECK(!third.declared("ghost") && third.list().size() == 1);
+}
+
+static void test_available_when_confirmed() {
+    SelfCheck check;
+    Verdict verdict = Verdict::NotRun;
+    Detector d;
+    d.name = "screen";
+    d.klass = PeripheralClass::NoSignal;
+    d.run = [&](Mode) {
+        Finding f;
+        f.verdict = verdict;
+        return f;
+    };
+    CHECK(check.add(d));
+    PartsRig rig;
+    DeclaredParts parts({"screen"}, rig.storage());
+    auto available = available_when_confirmed(check, "screen", parts);
+
+    // Nothing observed, nobody said it is there: not declared.
+    CHECK(!available());
+    check.run(Mode::Quick);
+    CHECK(!available());
+    verdict = Verdict::Unverified;
+    check.run(Mode::Quick);
+    CHECK(!available());  // present as far as known is not enough
+
+    // A person says it is there: declared, also before any run and after a reboot.
+    CHECK(parts.set("screen", true) == DeclaredParts::SetResult::Ok);
+    CHECK(available());
+    // Evidence of absence or breakage beats the declaration.
+    verdict = Verdict::NotFound;
+    check.run(Mode::Quick);
+    CHECK(!available());
+    verdict = Verdict::Failed;
+    check.run(Mode::Quick);
+    CHECK(!available());
+    // Observed working: declared whether or not anyone said so (evidence wins over "no").
+    verdict = Verdict::Ok;
+    check.run(Mode::Quick);
+    CHECK(available());
+    CHECK(parts.set("screen", false) == DeclaredParts::SetResult::Ok);
+    CHECK(available());
+    // A part nobody registered is never declared.
+    CHECK(!available_when_confirmed(check, "no_such_part", parts)());
+}
 
 static void test_setup_protocol() {
     // hello: no secret, recognises the device, reports the state.
@@ -988,6 +1151,38 @@ static void test_setup_protocol() {
             r.line(R"({"v":1,"id":9,"cmd":"hello"})");
             CHECK(r.last().find(std::string("\"state\":\"") + wifi_state_name(st) + "\"}") != std::string::npos);
         }
+    }
+    // parts / declare: a person says which unobservable parts are on the board.
+    {
+        SetupRig r;
+        r.line(R"({"v":1,"id":40,"cmd":"parts"})");
+        CHECK_EQ(r.last(), R"(DCSETUP {"v":1,"id":40,"ok":true,"parts":[{"name":"screen","declared":false},{"name":"speaker","declared":false}]})");
+        r.line(R"({"v":1,"id":41,"cmd":"declare","part":"screen","present":true})");
+        CHECK_EQ(r.last(), R"(DCSETUP {"v":1,"id":41,"ok":true,"part":"screen","present":true})");
+        r.line(R"({"v":1,"id":42,"cmd":"parts"})");
+        CHECK(r.last().find(R"({"name":"screen","declared":true},{"name":"speaker","declared":false})") != std::string::npos);
+        r.line(R"({"v":1,"id":43,"cmd":"declare","part":"screen","present":false})");
+        CHECK(r.last().find("\"present\":false") != std::string::npos);
+        r.line(R"({"v":1,"id":44,"cmd":"declare","part":"camera","present":true})");
+        CHECK(r.last().find("\"code\":\"unknown_part\"") != std::string::npos);
+        for (const char* bad : {R"({"v":1,"id":45,"cmd":"declare"})", R"({"v":1,"id":46,"cmd":"declare","part":"screen"})",
+                                R"({"v":1,"id":47,"cmd":"declare","part":"screen","present":"yes"})",
+                                R"({"v":1,"id":48,"cmd":"declare","part":7,"present":true})"}) {
+            r.line(bad);
+            CHECK(r.last().find("\"code\":\"bad_request\"") != std::string::npos);
+        }
+        r.part_store_ok = false;
+        r.line(R"({"v":1,"id":49,"cmd":"declare","part":"speaker","present":true})");
+        CHECK(r.last().find("\"code\":\"internal\"") != std::string::npos);
+        // A device with nothing to declare.
+        SetupBackend none;
+        std::vector<std::string> out;
+        SetupProtocol p(SetupRig::info(), none, [&](const std::string& l) { out.push_back(l); });
+        std::string text = "DCSETUP {\"v\":1,\"id\":50,\"cmd\":\"parts\"}\nDCSETUP {\"v\":1,\"id\":51,\"cmd\":\"declare\",\"part\":\"screen\",\"present\":true}\n";
+        p.feed(text.data(), text.size());
+        CHECK(out.size() == 2);
+        CHECK_EQ(out[0], R"(DCSETUP {"v":1,"id":50,"ok":true,"parts":[]})");
+        CHECK(out[1].find("\"code\":\"unknown_part\"") != std::string::npos);
     }
     // Framing: log noise and lines without the prefix are ignored, \r\n works, a
     // line can arrive in pieces, an empty line is ignored.
@@ -1171,6 +1366,9 @@ int main() {
     test_i2c_ids();
     test_audio_analysis();
     test_setup_protocol();
+    test_capability_availability();
+    test_declared_parts();
+    test_available_when_confirmed();
     if (g_failures == 0) {
         std::printf("all tests passed\n");
         return 0;
