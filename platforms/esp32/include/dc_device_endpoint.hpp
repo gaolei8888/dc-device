@@ -17,17 +17,20 @@ struct InvokeResult {
     Status status = Status::Ok;
     std::string result_json = "{}";  // Ok: JSON value placed under "result"
     std::string message;             // InvalidArguments / Failed
+    // Optional stable, machine-readable reason (e.g. "camera_no_frame"), sent as "code" in
+    // the error body. Empty = none. A host branches on it; `message` is for people.
+    std::string code;
 
     static InvokeResult success(std::string result_json = "{}") {
-        return {Status::Ok, std::move(result_json), {}};
+        return {Status::Ok, std::move(result_json), {}, {}};
     }
     // The caller sent bad arguments (HTTP 400).
-    static InvokeResult invalid(std::string message) {
-        return {Status::InvalidArguments, {}, std::move(message)};
+    static InvokeResult invalid(std::string message, std::string code = "") {
+        return {Status::InvalidArguments, {}, std::move(message), std::move(code)};
     }
     // The arguments were fine but the device could not act (HTTP 500).
-    static InvokeResult failed(std::string message) {
-        return {Status::Failed, {}, std::move(message)};
+    static InvokeResult failed(std::string message, std::string code = "") {
+        return {Status::Failed, {}, std::move(message), std::move(code)};
     }
 };
 
@@ -46,6 +49,12 @@ struct CapabilitySpec {
     // AI is never offered a part the firmware has no evidence is there
     // (docs/self-check-v0.1.md, "Declaring capabilities"). Called from the HTTP task.
     std::function<bool()> available = nullptr;
+    // How long a host should wait for the result, in milliseconds; 0 = not stated. Read-only
+    // information in /manifest (`expected_duration_ms`), not a limit and not safety.max_duration_ms.
+    // `max` is how long to wait before calling the result unknown; `typical` is optional and
+    // must not exceed `max`. Set `max` whenever a call can take more than about 3 seconds.
+    int expected_typical_ms = 0;
+    int expected_max_ms = 0;
 };
 
 // Outcome of one health check (docs/health-contract-v0.1.md).

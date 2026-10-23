@@ -7,11 +7,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
+#include "dc_device_base64.hpp"
 #include "dc_device_declared_parts.hpp"
 #include "dc_device_i2c_detect.hpp"
 #include "dc_device_parts_nvs.hpp"
+#include "dc_device_screen_blocks.hpp"
 #include "dc_device_mic_detect.hpp"
 #include "dc_device_pin_survey.hpp"
 #include <vector>
@@ -144,7 +147,24 @@ bool tft_fill(spi_device_handle_t dev, uint16_t color) {
     return ok;
 }
 
-bool screen_test() {
+// The panel stays open between calls once a screen capability has started it, so a picture can
+// arrive in pieces (screen.write_block). screen.fill_test closes it first and starts over, as
+// it always did, because this panel is known to be unreliable.
+spi_device_handle_t g_tft = nullptr;
+bool g_tft_bus = false;
+
+void tft_release() {
+    if (g_tft != nullptr) spi_bus_remove_device(g_tft);
+    g_tft = nullptr;
+    if (g_tft_bus) spi_bus_free(SPI2_HOST);
+    g_tft_bus = false;
+    for (int p : {kTftSck, kTftMosi, kTftDc, kTftCs}) gpio_reset_pin(static_cast<gpio_num_t>(p));
+}
+
+// Starts the bus and the panel (reset, sleep out, 16 bits per pixel, display on) unless they
+// are already open. On failure it closes whatever it opened and g_screen_error says why.
+bool tft_open() {
+    if (g_tft != nullptr) return true;
     gpio_config_t dc{};
     dc.pin_bit_mask = 1ULL << kTftDc;
     dc.mode = GPIO_MODE_OUTPUT;
@@ -159,38 +179,152 @@ bool screen_test() {
     g_screen_error.clear();
     esp_err_t be = spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
     note("spi_bus_initialize", be);
-    if (be != ESP_OK) return false;
+    if (be != ESP_OK) {
+        tft_release();
+        return false;
+    }
+    g_tft_bus = true;
     spi_device_interface_config_t dev_cfg{};
     dev_cfg.clock_speed_hz = 20 * 1000 * 1000;
     dev_cfg.mode = 2;  // polarity 1, phase 0, as the original program
     dev_cfg.spics_io_num = kTftCs;
     dev_cfg.queue_size = 1;
-    spi_device_handle_t dev = nullptr;
-    esp_err_t ae = spi_bus_add_device(SPI2_HOST, &dev_cfg, &dev);
+    esp_err_t ae = spi_bus_add_device(SPI2_HOST, &dev_cfg, &g_tft);
     note("spi_bus_add_device", ae);
-    bool ok = ae == ESP_OK;
-    if (ok) {
-        tft_cmd(dev, 0x01);  // software reset
-        vTaskDelay(pdMS_TO_TICKS(150));
-        tft_cmd(dev, 0x11);  // sleep out
-        vTaskDelay(pdMS_TO_TICKS(120));
-        const uint8_t colmod = 0x55;  // 16 bits per pixel
-        tft_cmd(dev, 0x3A, &colmod, 1);
-        const uint8_t madctl = 0x00;
-        tft_cmd(dev, 0x36, &madctl, 1);
-        tft_cmd(dev, 0x21);  // inversion on, as most ST7789 panels need
-        tft_cmd(dev, 0x13);  // normal display mode
-        tft_cmd(dev, 0x29);  // display on
-        vTaskDelay(pdMS_TO_TICKS(50));
-        for (uint16_t color : {uint16_t{0xF800}, uint16_t{0x07E0}, uint16_t{0x001F}, uint16_t{0x0000}}) {
-            ok = tft_fill(dev, color) && ok;
-            vTaskDelay(pdMS_TO_TICKS(700));
-        }
-        spi_bus_remove_device(dev);
+    if (ae != ESP_OK) {
+        g_tft = nullptr;
+        tft_release();
+        return false;
     }
-    spi_bus_free(SPI2_HOST);
-    for (int p : {kTftSck, kTftMosi, kTftDc, kTftCs}) gpio_reset_pin(static_cast<gpio_num_t>(p));
+    tft_cmd(g_tft, 0x01);  // software reset
+    vTaskDelay(pdMS_TO_TICKS(150));
+    tft_cmd(g_tft, 0x11);  // sleep out
+    vTaskDelay(pdMS_TO_TICKS(120));
+    const uint8_t colmod = 0x55;  // 16 bits per pixel
+    tft_cmd(g_tft, 0x3A, &colmod, 1);
+    const uint8_t madctl = 0x00;
+    tft_cmd(g_tft, 0x36, &madctl, 1);
+    tft_cmd(g_tft, 0x21);  // inversion on, as most ST7789 panels need
+    tft_cmd(g_tft, 0x13);  // normal display mode
+    tft_cmd(g_tft, 0x29);  // display on
+    vTaskDelay(pdMS_TO_TICKS(50));
+    if (!g_screen_error.empty()) {  // a command could not even be sent
+        tft_release();
+        return false;
+    }
+    return true;
+}
+
+bool screen_test() {
+    tft_release();
+    if (!tft_open()) return false;
+    bool ok = true;
+    for (uint16_t color : {uint16_t{0xF800}, uint16_t{0x07E0}, uint16_t{0x001F}, uint16_t{0x0000}}) {
+        ok = tft_fill(g_tft, color) && ok;
+        vTaskDelay(pdMS_TO_TICKS(700));
+    }
     return ok;
+}
+
+// Opens the rectangle x..x+w-1, y..y+h-1 for the pixels that follow.
+bool tft_window(int x, int y, int w, int h) {
+    const uint8_t col[4] = {uint8_t(x >> 8), uint8_t(x), uint8_t((x + w - 1) >> 8), uint8_t(x + w - 1)};
+    const uint8_t row[4] = {uint8_t(y >> 8), uint8_t(y), uint8_t((y + h - 1) >> 8), uint8_t(y + h - 1)};
+    return tft_cmd(g_tft, 0x2A, col, 4) && tft_cmd(g_tft, 0x2B, row, 4);
+}
+
+// Sends `count` pixels' worth of bytes (RGB565, high byte first) to the open window. `source`
+// either points at the bytes or, when null, `fill` is repeated. Chunks go through a DMA buffer.
+bool tft_pixels(const uint8_t* source, uint16_t fill, size_t byte_count) {
+    uint8_t* chunk = static_cast<uint8_t*>(heap_caps_malloc(4096, MALLOC_CAP_DMA));
+    if (chunk == nullptr) {
+        note("dma buffer", ESP_ERR_NO_MEM);
+        return false;
+    }
+    if (source == nullptr) {
+        for (int i = 0; i < 4096; i += 2) {
+            chunk[i] = fill >> 8;
+            chunk[i + 1] = fill & 0xFF;
+        }
+    }
+    uint8_t ramwr = 0x2C;
+    gpio_set_level(static_cast<gpio_num_t>(kTftDc), 0);
+    spi_transaction_t t{};
+    t.length = 8;
+    t.tx_buffer = &ramwr;
+    esp_err_t re = spi_device_polling_transmit(g_tft, &t);
+    note("RAMWR", re);
+    bool ok = re == ESP_OK;
+    gpio_set_level(static_cast<gpio_num_t>(kTftDc), 1);
+    size_t done = 0;
+    while (ok && done < byte_count) {
+        size_t n = byte_count - done < 4096 ? byte_count - done : 4096;
+        if (source != nullptr) memcpy(chunk, source + done, n);
+        spi_transaction_t d{};
+        d.length = n * 8;
+        d.tx_buffer = chunk;
+        esp_err_t de = spi_device_polling_transmit(g_tft, &d);
+        note("pixel data", de);
+        ok = de == ESP_OK;
+        done += n;
+    }
+    heap_caps_free(chunk);
+    return ok;
+}
+
+bool int_arg(const json::Value& args, const char* key, int& out) {
+    const json::Value* v = args.find(key);
+    if (v == nullptr || !v->is_number()) return false;
+    out = static_cast<int>(v->number);
+    return true;
+}
+
+InvokeResult screen_draw_rect(const json::Value& args) {
+    int x = 0, y = 0, w = 0, h = 0, color = 0;
+    if (!int_arg(args, "x", x) || !int_arg(args, "y", y) || !int_arg(args, "width", w) ||
+        !int_arg(args, "height", h) || !int_arg(args, "color", color)) {
+        return InvokeResult::invalid("x, y, width, height and color are required integers");
+    }
+    if (color < 0 || color > 65535) return InvokeResult::invalid("color must be 0..65535 (RGB565)");
+    if (dc_device::esp32::check_rect(x, y, w, h) != dc_device::esp32::RectCheck::Ok) {
+        return InvokeResult::invalid("The rectangle lies outside the 240 x 320 screen", "out_of_range");
+    }
+    g_screen_error.clear();
+    if (!tft_open() || !tft_window(x, y, w, h) || !tft_pixels(nullptr, static_cast<uint16_t>(color), size_t(w) * h * 2)) {
+        return InvokeResult::failed("Could not drive the screen (" + g_screen_error + ")", "screen_not_ready");
+    }
+    return InvokeResult::success("{\"drawn\":true}");
+}
+
+InvokeResult screen_write_block(const json::Value& args) {
+    int x = 0, y = 0, w = 0, h = 0;
+    const json::Value* data = args.find("data_base64");
+    if (!int_arg(args, "x", x) || !int_arg(args, "y", y) || !int_arg(args, "width", w) ||
+        !int_arg(args, "height", h) || data == nullptr || !data->is_string()) {
+        return InvokeResult::invalid("x, y, width, height and data_base64 are required");
+    }
+    // 7680 bytes of pixels are 10240 base64 characters; refuse anything longer before decoding.
+    if (data->string.size() > (dc_device::esp32::kMaxBlockBytes + 2) / 3 * 4) {
+        return InvokeResult::invalid("The block is larger than 7680 bytes", "bad_block_size");
+    }
+    std::vector<uint8_t> bytes;
+    if (!dc_device::base64_decode(data->string, bytes)) {
+        return InvokeResult::invalid("data_base64 is not valid base64", "bad_base64");
+    }
+    switch (dc_device::esp32::check_block(x, y, w, h, bytes.size())) {
+        case dc_device::esp32::BlockCheck::OutOfRange:
+            return InvokeResult::invalid("The block lies outside the 240 x 320 screen", "out_of_range");
+        case dc_device::esp32::BlockCheck::BadBlockSize:
+            return InvokeResult::invalid("data must be width x height x 2 bytes (RGB565, high byte first), at most 7680",
+                                         "bad_block_size");
+        case dc_device::esp32::BlockCheck::Ok:
+            break;
+    }
+    g_screen_error.clear();
+    if (!tft_open() || !tft_window(x, y, w, h) || !tft_pixels(bytes.data(), 0, bytes.size())) {
+        return InvokeResult::failed("Could not drive the screen (" + g_screen_error + ")", "screen_not_ready");
+    }
+    return InvokeResult::success("{\"written\":" + std::to_string(bytes.size()) + "}");
 }
 }  // namespace
 
@@ -254,6 +388,8 @@ extern "C" void app_main() {
                                     : InvokeResult::failed("Could not start the speaker output");
     };
     bp.available = dc_device::esp32::available_when_confirmed(self_check, "speaker", declared_parts);
+    bp.expected_typical_ms = 400;  // the tone is 300 ms plus setup
+    bp.expected_max_ms = 1500;
     endpoint.add(bp);
     dc_device::esp32::CapabilitySpec sc;
     sc.name = "screen.fill_test";
@@ -266,7 +402,38 @@ extern "C" void app_main() {
                              : InvokeResult::failed("Could not drive the screen (" + g_screen_error + ")");
     };
     sc.available = dc_device::esp32::available_when_confirmed(self_check, "screen", declared_parts);
+    sc.expected_typical_ms = 3400;  // read from the code (320 + 4 x 700 + fills), not measured
+    sc.expected_max_ms = 6000;
     endpoint.add(sc);
+
+    const char* rect_props =
+        R"("x":{"type":"integer","minimum":0,"maximum":239},"y":{"type":"integer","minimum":0,"maximum":319},)"
+        R"("width":{"type":"integer","minimum":1,"maximum":240},"height":{"type":"integer","minimum":1,"maximum":320})";
+    dc_device::esp32::CapabilitySpec dr;
+    dr.name = "screen.draw_rect";
+    dr.description = "Fill a rectangle of the 240 x 320 screen with one color (RGB565, 0..65535).";
+    dr.kind = "action";
+    dr.parameters_json = std::string(R"({"type":"object","properties":{)") + rect_props +
+                         R"(,"color":{"type":"integer","minimum":0,"maximum":65535}},"required":["x","y","width","height","color"]})";
+    dr.safety_json = R"({"max_rate_hz":20})";
+    dr.handler = screen_draw_rect;
+    dr.available = dc_device::esp32::available_when_confirmed(self_check, "screen", declared_parts);
+    dr.expected_max_ms = 1000;
+    endpoint.add(dr);
+    dc_device::esp32::CapabilitySpec wb;
+    wb.name = "screen.write_block";
+    wb.description =
+        "Write pixels into a rectangle of the 240 x 320 screen: width x height x 2 bytes of RGB565 "
+        "(high byte first), at most 7680 bytes, as base64 in data_base64.";
+    wb.kind = "action";
+    wb.parameters_json = std::string(R"({"type":"object","properties":{)") + rect_props +
+                         R"(,"data_base64":{"type":"string"}},"required":["x","y","width","height","data_base64"]})";
+    wb.safety_json = R"({"max_rate_hz":20})";
+    wb.handler = screen_write_block;
+    wb.available = dc_device::esp32::available_when_confirmed(self_check, "screen", declared_parts);
+    wb.expected_typical_ms = 150;  // a guess: HTTP time dominates; to be measured
+    wb.expected_max_ms = 1500;
+    endpoint.add(wb);
 
 #if !CONFIG_DC_DEVICE_RELEASE
     // Debugging aid: try a microphone on given pins. Drives sck and ws.
@@ -408,6 +575,7 @@ extern "C" void app_main() {
         return;
     }
     http_config.port = CONFIG_DC_DEVICE_HTTP_PORT;
+    http_config.max_body_bytes = 12288;  // a screen.write_block of 7680 bytes is about 10.3 KB of base64
 
     // Network: whatever was stored by USB setup. A network compiled in is only for
     // development and is left out of release builds.

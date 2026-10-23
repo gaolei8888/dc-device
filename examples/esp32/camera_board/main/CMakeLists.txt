@@ -5,6 +5,8 @@ idf_component_register(
          "../../../../platforms/esp32/src/dc_device_wifi_manager.cpp"
          "../../../../platforms/esp32/src/dc_device_declared_parts.cpp"
          "../../../../platforms/esp32/src/dc_device_parts_nvs.cpp"
+         "../../../../platforms/esp32/src/dc_device_base64.cpp"
+         "../../../../platforms/esp32/src/dc_device_screen_blocks.cpp"
          "../../../../platforms/esp32/src/dc_device_setup.cpp"
          "../../../../platforms/esp32/src/dc_device_setup_console.cpp"
          "../../../../platforms/esp32/src/dc_device_json.cpp"

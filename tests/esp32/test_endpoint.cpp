@@ -8,6 +8,8 @@
 #include <string>
 
 #include "dc_device_audio_analysis.hpp"
+#include "dc_device_base64.hpp"
+#include "dc_device_screen_blocks.hpp"
 #include "dc_device_chip.hpp"
 #include "dc_device_declared_parts.hpp"
 #include "dc_device_endpoint.hpp"
@@ -1133,6 +1135,137 @@ static void test_available_when_confirmed() {
     CHECK(!available_when_confirmed(check, "no_such_part", parts)());
 }
 
+static void test_error_codes() {
+    Endpoint ep("b", "t", "n");
+    auto add = [&](const char* name, InvokeResult result) {
+        CapabilitySpec c;
+        c.name = name;
+        c.description = "x";
+        c.kind = "sensor";
+        c.handler = [result](const json::Value&) { return result; };
+        CHECK(ep.add(c));
+    };
+    add("a.plain_fail", InvokeResult::failed("no luck"));
+    add("a.coded_fail", InvokeResult::failed("no frame arrived", "camera_no_frame"));
+    add("a.coded_invalid", InvokeResult::invalid("outside the screen", "out_of_range"));
+    add("a.plain_invalid", InvokeResult::invalid("bad"));
+    auto call = [&](const char* name) {
+        return ep.handle("POST", "/invoke", std::string("{\"capability\":\"") + name + "\",\"arguments\":{}}");
+    };
+    // Without a code the body is exactly what it was before.
+    Response r = call("a.plain_fail");
+    CHECK(r.status == 500);
+    CHECK_EQ(r.body, R"({"ok":false,"error":"DeviceError","message":"no luck"})");
+    r = call("a.plain_invalid");
+    CHECK(r.status == 400);
+    CHECK_EQ(r.body, R"({"ok":false,"error":"InvalidArguments","message":"bad"})");
+    // With a code it is added between error and message; status and error name are unchanged.
+    r = call("a.coded_fail");
+    CHECK(r.status == 500);
+    CHECK_EQ(r.body, R"({"ok":false,"error":"DeviceError","code":"camera_no_frame","message":"no frame arrived"})");
+    r = call("a.coded_invalid");
+    CHECK(r.status == 400);
+    CHECK_EQ(r.body, R"({"ok":false,"error":"InvalidArguments","code":"out_of_range","message":"outside the screen"})");
+    // Every body stays valid JSON.
+    json::Value parsed;
+    std::string err;
+    CHECK(json::parse(r.body, parsed, err));
+}
+
+static void test_expected_duration() {
+    Endpoint ep("b", "t", "n");
+    CapabilitySpec slow;
+    slow.name = "screen.fill_test";
+    slow.description = "x";
+    slow.kind = "action";
+    slow.handler = [](const json::Value&) { return InvokeResult::success(); };
+    slow.expected_typical_ms = 3400;
+    slow.expected_max_ms = 6000;
+    CHECK(ep.add(slow));
+    CapabilitySpec quick;
+    quick.name = "heap.read";
+    quick.description = "x";
+    quick.kind = "sensor";
+    quick.handler = [](const json::Value&) { return InvokeResult::success(); };
+    CHECK(ep.add(quick));
+    json::Value m;
+    std::string err;
+    CHECK(json::parse(ep.manifest(), m, err));
+    const json::Value* d = m.find("capabilities")->items[0].find("expected_duration_ms");
+    CHECK(d != nullptr && d->is_object());
+    CHECK(d->find("typical")->number == 3400 && d->find("max")->number == 6000);
+    // No expected duration set: the field is absent, the entry is as before.
+    CHECK(m.find("capabilities")->items[1].find("expected_duration_ms") == nullptr);
+    // Nonsense is refused at registration: max below typical, negative, typical without max.
+    for (auto bad : {std::pair<int, int>{5000, 1000}, {-1, 100}, {100, -1}, {100, 0}}) {
+        CapabilitySpec c = quick;
+        c.name = "x.bad";
+        c.expected_typical_ms = bad.first;
+        c.expected_max_ms = bad.second;
+        CHECK(!ep.add(c));
+    }
+    // max alone is fine: the host only needs how long to wait.
+    CapabilitySpec only_max = quick;
+    only_max.name = "x.only_max";
+    only_max.expected_max_ms = 2000;
+    CHECK(ep.add(only_max));
+    CHECK(ep.manifest().find(R"("expected_duration_ms":{"max":2000})") != std::string::npos);
+}
+
+static void test_base64() {
+    auto enc = [](const std::string& s) { return base64_encode(reinterpret_cast<const uint8_t*>(s.data()), s.size()); };
+    // RFC 4648 section 10.
+    CHECK_EQ(enc(""), "");
+    CHECK_EQ(enc("f"), "Zg==");
+    CHECK_EQ(enc("fo"), "Zm8=");
+    CHECK_EQ(enc("foo"), "Zm9v");
+    CHECK_EQ(enc("foob"), "Zm9vYg==");
+    CHECK_EQ(enc("fooba"), "Zm9vYmE=");
+    CHECK_EQ(enc("foobar"), "Zm9vYmFy");
+    std::vector<uint8_t> out;
+    for (std::string v : {"", "f", "fo", "foo", "foob", "fooba", "foobar"}) {
+        CHECK(base64_decode(enc(v), out));
+        CHECK(std::string(out.begin(), out.end()) == v);
+    }
+    // All byte values, including 0 and 0xFF, round-trip.
+    std::vector<uint8_t> all(256);
+    for (int i = 0; i < 256; ++i) all[i] = uint8_t(i);
+    CHECK(base64_decode(base64_encode(all.data(), all.size()), out) && out == all);
+    CHECK_EQ(base64_encode(all.data(), 3), "AAEC");
+    // Strict: anything but standard, padded, whole-quad base64 is refused and leaves `out` empty.
+    for (const char* bad : {"Zg=", "Zg", "Zm9", "Z", "Zg==Zg==", "Zm9v\n", "Zm 9v", "Zm9v ", "Zm-v", "Zm_v", "Zm9v=",
+                            "=Zm9", "Z===", "Zg=a", "Zm9\x01", "Zm9v\xC3\xA9"}) {
+        out = {1, 2, 3};
+        CHECK(!base64_decode(bad, out));
+        CHECK(out.empty());
+    }
+    CHECK(base64_decode(std::string("Zm9v\0Zm9v", 9), out) == false);  // embedded NUL
+}
+
+static void test_screen_blocks() {
+    // The screen is 240 x 320.
+    CHECK(check_rect(0, 0, 240, 320) == RectCheck::Ok);
+    CHECK(check_rect(239, 319, 1, 1) == RectCheck::Ok);
+    CHECK(check_rect(0, 0, 241, 1) == RectCheck::OutOfRange);
+    CHECK(check_rect(0, 0, 1, 321) == RectCheck::OutOfRange);
+    CHECK(check_rect(240, 0, 1, 1) == RectCheck::OutOfRange);
+    CHECK(check_rect(0, 320, 1, 1) == RectCheck::OutOfRange);
+    CHECK(check_rect(200, 0, 41, 1) == RectCheck::OutOfRange);
+    CHECK(check_rect(-1, 0, 1, 1) == RectCheck::OutOfRange);
+    CHECK(check_rect(0, 0, 0, 1) == RectCheck::OutOfRange);
+    CHECK(check_rect(0, 0, 1, 0) == RectCheck::OutOfRange);
+    // A block carries exactly width * height * 2 bytes and at most 7680 of them.
+    CHECK(check_block(0, 0, 240, 16, 7680) == BlockCheck::Ok);          // the full-width strip
+    CHECK(check_block(10, 20, 3, 2, 12) == BlockCheck::Ok);
+    CHECK(check_block(0, 0, 240, 16, 7679) == BlockCheck::BadBlockSize);
+    CHECK(check_block(0, 0, 240, 16, 7681) == BlockCheck::BadBlockSize);
+    CHECK(check_block(0, 0, 3, 2, 11) == BlockCheck::BadBlockSize);
+    CHECK(check_block(0, 0, 240, 17, 8160) == BlockCheck::BadBlockSize);  // exact size but too big
+    CHECK(check_block(0, 0, 1, 1, 0) == BlockCheck::BadBlockSize);
+    CHECK(check_block(0, 310, 240, 16, 7680) == BlockCheck::OutOfRange);   // range is checked first
+    CHECK(kMaxBlockBytes == 7680 && kScreenWidth == 240 && kScreenHeight == 320);
+}
+
 static void test_setup_protocol() {
     // hello: no secret, recognises the device, reports the state.
     {
@@ -1366,6 +1499,10 @@ int main() {
     test_i2c_ids();
     test_audio_analysis();
     test_setup_protocol();
+    test_error_codes();
+    test_expected_duration();
+    test_base64();
+    test_screen_blocks();
     test_capability_availability();
     test_declared_parts();
     test_available_when_confirmed();

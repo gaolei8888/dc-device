@@ -10,8 +10,9 @@ bool is_json_object(const std::string& text) {
     return json::parse(text, value, error) && value.is_object();
 }
 
-std::string error_body(const std::string& code, const std::string& message) {
-    return "{\"ok\":false,\"error\":" + json::quote(code) +
+std::string error_body(const std::string& name, const std::string& message, const std::string& code = "") {
+    return "{\"ok\":false,\"error\":" + json::quote(name) +
+           (code.empty() ? "" : ",\"code\":" + json::quote(code)) +
            ",\"message\":" + json::quote(message) + "}";
 }
 
@@ -112,8 +113,9 @@ std::string validate_arguments(const std::string& schema_json, const json::Value
     return {};
 }
 
-Response error_response(int status, const std::string& code, const std::string& message) {
-    return {status, error_body(code, message)};
+Response error_response(int status, const std::string& name, const std::string& message,
+                        const std::string& code = "") {
+    return {status, error_body(name, message, code)};
 }
 
 }  // namespace
@@ -128,6 +130,10 @@ bool Endpoint::add(CapabilitySpec spec) {
     if (!is_json_object(spec.parameters_json) || !is_json_object(spec.returns_json) ||
         !is_json_object(spec.safety_json)) {
         return false;
+    }
+    if (spec.expected_typical_ms < 0 || spec.expected_max_ms < 0 ||
+        (spec.expected_typical_ms > 0 && spec.expected_typical_ms > spec.expected_max_ms)) {
+        return false;  // typical without max, or typical above max, or negative
     }
     for (const auto& existing : capabilities_) {
         if (existing.name == spec.name) {
@@ -430,7 +436,13 @@ std::string Endpoint::manifest() const {
         out += ",\"kind\":" + json::quote(cap.kind);
         out += ",\"parameters\":" + cap.parameters_json;
         out += ",\"returns\":" + cap.returns_json;
-        out += ",\"safety\":" + cap.safety_json + "}";
+        out += ",\"safety\":" + cap.safety_json;
+        if (cap.expected_max_ms > 0) {
+            out += ",\"expected_duration_ms\":{";
+            if (cap.expected_typical_ms > 0) out += "\"typical\":" + std::to_string(cap.expected_typical_ms) + ",";
+            out += "\"max\":" + std::to_string(cap.expected_max_ms) + "}";
+        }
+        out += "}";
     }
     out += "]";
     if (!safe_state_.empty()) {
@@ -540,9 +552,9 @@ Response Endpoint::invoke(const std::string& body) const {
                         "{\"ok\":true,\"capability\":" + json::quote(cap.name) +
                             ",\"result\":" + result.result_json + "}"};
             case InvokeResult::Status::InvalidArguments:
-                return error_response(400, "InvalidArguments", result.message);
+                return error_response(400, "InvalidArguments", result.message, result.code);
             case InvokeResult::Status::Failed:
-                return error_response(500, "DeviceError", result.message);
+                return error_response(500, "DeviceError", result.message, result.code);
         }
     }
     return error_response(404, "UnknownCapability",
