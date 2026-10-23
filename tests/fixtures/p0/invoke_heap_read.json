@@ -1,0 +1,12 @@
+{
+  "source": "6740 (camera_board firmware 0.1.0+deae116), read-only requests, 2026-10-22; serial replaced by AABBCCDDEEFF",
+  "request": "POST /invoke {\"capability\":\"heap.read\",\"arguments\":{}}",
+  "status": 200,
+  "body": {
+    "ok": true,
+    "capability": "heap.read",
+    "result": {
+      "free_heap_bytes": 222856
+    }
+  }
+}

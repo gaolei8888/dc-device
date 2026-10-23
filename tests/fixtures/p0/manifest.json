@@ -1,0 +1,27 @@
+{
+  "source": "6740 (camera_board firmware 0.1.0+deae116), read-only requests, 2026-10-22; serial replaced by AABBCCDDEEFF",
+  "request": "GET /manifest",
+  "status": 200,
+  "body": {
+    "spec_version": "0.1",
+    "device": {
+      "id": "camera_board_01",
+      "type": "camera_board",
+      "name": "ESP32-S3 Camera Board",
+      "metadata": {}
+    },
+    "capabilities": [
+      {
+        "name": "heap.read",
+        "description": "Read the free heap size.",
+        "kind": "sensor",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        },
+        "returns": {},
+        "safety": {}
+      }
+    ]
+  }
+}

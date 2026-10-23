@@ -1,0 +1,9 @@
+{
+  "source": "6740 (camera_board firmware 0.1.0+deae116), read-only requests, 2026-10-22; serial replaced by AABBCCDDEEFF",
+  "request": "GET /health",
+  "status": 200,
+  "body": {
+    "status": "ok",
+    "device_id": "camera_board_01"
+  }
+}

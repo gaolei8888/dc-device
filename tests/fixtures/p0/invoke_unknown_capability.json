@@ -1,0 +1,10 @@
+{
+  "source": "6740 (camera_board firmware 0.1.0+deae116), read-only requests, 2026-10-22; serial replaced by AABBCCDDEEFF",
+  "request": "POST /invoke {\"capability\":\"no.such\",\"arguments\":{}}",
+  "status": 404,
+  "body": {
+    "ok": false,
+    "error": "UnknownCapability",
+    "message": "Unknown capability: no.such"
+  }
+}

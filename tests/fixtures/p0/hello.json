@@ -1,0 +1,19 @@
+{
+  "source": "NOT captured from a board: built from the host protocol test in tests/esp32/test_endpoint.cpp (docs/usb-setup-protocol-v0.1.md); replace with a real capture when a board's hello is recorded with the user's approval",
+  "request": "DCSETUP {\"v\":1,\"id\":7,\"cmd\":\"hello\"}",
+  "status": null,
+  "body": {
+    "v": 1,
+    "id": 7,
+    "ok": true,
+    "setup_protocol": 1,
+    "device_id": "camera_board_01",
+    "type": "camera_board",
+    "model": "ESP32-S3 Camera Board",
+    "firmware_version": "0.1.0+deae116",
+    "serial": "AABBCCDDEEFF",
+    "state": "connected",
+    "port": 8787,
+    "ip": "192.168.1.20"
+  }
+}
