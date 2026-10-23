@@ -10,6 +10,9 @@ requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "dc-device contributors" }]
 
+[project.optional-dependencies]
+image = ["Pillow>=10"]  # show_image
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["dc_device*"]
