@@ -117,6 +117,16 @@
               }
             },
             "additionalProperties": true
+          },
+          "expected_duration_ms": {
+            "description": "How long a host should wait for the result. Read-only information, not a limit and not safety.max_duration_ms. `max` is how long to wait before calling the result unknown; `typical` is optional and not above `max`. Absent: the host uses its own default.",
+            "type": "object",
+            "required": ["max"],
+            "properties": {
+              "typical": { "type": "integer", "minimum": 1 },
+              "max": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": true
