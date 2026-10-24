@@ -42,13 +42,17 @@ VERSION="$BASE_VERSION+$COMMIT_SHORT"
 OUT="$ROOT/release/camera_board/$VERSION"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dc-device-release.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$OUT" "$WORK/build"
+mkdir -p "$OUT" "$WORK/build" "$WORK/src"
+# The build runs on a copy of the files git knows (tracked, plus untracked that are not ignored):
+# the component manager writes managed_components/ and dependencies.lock next to the project,
+# and nothing it downloads may land in, or be picked up from, the working tree.
+git ls-files -z -co --exclude-standard | tar --null -T - -cf - | tar -x -C "$WORK/src"
 cat > "$WORK/release.conf" <<CONF
 CONFIG_DC_DEVICE_RELEASE=y
 CONFIG_APP_REPRODUCIBLE_BUILD=y
 CONF
 
-docker run --rm -v "$ROOT":/project:ro -v "$WORK":/out -w "/project/$EXAMPLE" "$IDF_IMAGE" \
+docker run --rm -v "$WORK/src":/project -v "$WORK":/out -w "/project/$EXAMPLE" "$IDF_IMAGE" \
   idf.py -B /out/build -DIDF_TARGET="$TARGET" -DSDKCONFIG=/out/sdkconfig \
   -DDC_DEVICE_VERSION="$VERSION" \
   "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;/out/release.conf" build
