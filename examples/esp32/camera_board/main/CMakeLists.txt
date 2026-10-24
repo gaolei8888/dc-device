@@ -21,7 +21,7 @@ idf_component_register(
          "../../../../platforms/esp32/src/dc_device_endpoint.cpp"
          "../../../../platforms/esp32/src/dc_device_http_server.cpp"
     INCLUDE_DIRS "../../../../platforms/esp32/include"
-    REQUIRES esp_http_server esp_event esp_netif esp_wifi nvs_flash driver freertos log spi_flash esp_hw_support esp_system esp_timer
+    REQUIRES esp_http_server esp_event esp_netif esp_wifi nvs_flash driver freertos log spi_flash esp_hw_support esp_system esp_timer esp_psram mbedtls esp32-camera
 )
 
 # scripts/build-release.sh passes -DDC_DEVICE_VERSION=0.1.0+<git commit>. A build made by

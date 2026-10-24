@@ -29,6 +29,9 @@
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "driver/spi_master.h"
+#include "esp_camera.h"
+#include "mbedtls/sha256.h"
+#include <atomic>
 #include "esp_heap_caps.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -326,6 +329,93 @@ InvokeResult screen_write_block(const json::Value& args) {
     }
     return InvokeResult::success("{\"written\":" + std::to_string(bytes.size()) + "}");
 }
+
+// ---- camera.capture -------------------------------------------------------------------
+// The sensor is an OV2640 on a DVP adapter that has its own oscillator, so no clock pin is
+// driven (xclk_pin -1). The driver only delivers frames with the frame buffers in PSRAM;
+// without it every frame overflowed (EV-VSYNC-OVF).
+constexpr size_t kMaxJpegBytes = 100000;
+std::atomic<bool> g_camera_busy{false};
+
+camera_config_t camera_config(framesize_t size, int jpeg_quality) {
+    camera_config_t c{};
+    c.pin_pwdn = -1; c.pin_reset = -1; c.pin_xclk = -1;
+    c.pin_sccb_sda = 4; c.pin_sccb_scl = 5;
+    c.pin_d0 = 11; c.pin_d1 = 9; c.pin_d2 = 8; c.pin_d3 = 10;
+    c.pin_d4 = 12; c.pin_d5 = 18; c.pin_d6 = 17; c.pin_d7 = 16;
+    c.pin_vsync = 6; c.pin_href = 7; c.pin_pclk = 13;
+    c.xclk_freq_hz = 24000000;
+    c.ledc_timer = LEDC_TIMER_0; c.ledc_channel = LEDC_CHANNEL_0;
+    c.pixel_format = PIXFORMAT_JPEG;
+    c.frame_size = size;
+    c.jpeg_quality = jpeg_quality;
+    c.fb_count = 2;
+    c.fb_location = CAMERA_FB_IN_PSRAM;
+    c.grab_mode = CAMERA_GRAB_LATEST;
+    c.sccb_i2c_port = -1;
+    return c;
+}
+
+// Takes one frame with the given settings. The first frames after start are discarded: the
+// exposure has not settled and the oldest buffers are stale. On success `jpeg` holds the picture.
+InvokeResult camera_take(framesize_t size, int jpeg_quality, std::vector<uint8_t>& jpeg, int& width, int& height) {
+    camera_config_t c = camera_config(size, jpeg_quality);
+    const esp_err_t e = esp_camera_init(&c);
+    if (e == ESP_ERR_NOT_FOUND) return InvokeResult::failed("The camera sensor does not answer", "camera_not_found");
+    if (e == ESP_ERR_NO_MEM) return InvokeResult::failed("Not enough memory for the camera frame buffers", "out_of_memory");
+    if (e != ESP_OK) return InvokeResult::failed(std::string("The camera driver did not start (") + esp_err_to_name(e) + ")", "camera_init_failed");
+    camera_fb_t* fb = nullptr;
+    for (int i = 0; i < 4; ++i) {
+        if (fb != nullptr) esp_camera_fb_return(fb);
+        fb = esp_camera_fb_get();
+        if (fb == nullptr) break;
+    }
+    if (fb == nullptr) {
+        esp_camera_deinit();
+        return InvokeResult::failed("The sensor answers but no frame arrived", "camera_no_frame");
+    }
+    jpeg.assign(fb->buf, fb->buf + fb->len);
+    width = fb->width;
+    height = fb->height;
+    esp_camera_fb_return(fb);
+    esp_camera_deinit();
+    return InvokeResult::success();
+}
+
+InvokeResult camera_capture(const json::Value& args) {
+    std::string size_name = "qvga";
+    if (const json::Value* v = args.find("size")) size_name = v->string;
+    int quality = 60;
+    if (const json::Value* v = args.find("quality")) quality = static_cast<int>(v->number);
+    if (size_name != "qqvga" && size_name != "qvga" && size_name != "vga") {
+        return InvokeResult::invalid("size must be qqvga, qvga or vga");
+    }
+    if (quality < 10 || quality > 90) return InvokeResult::invalid("quality must be 10..90");
+    if (g_camera_busy.exchange(true)) return InvokeResult::failed("Another capture is running", "camera_busy");
+    const framesize_t size = size_name == "qqvga" ? FRAMESIZE_QQVGA : size_name == "vga" ? FRAMESIZE_VGA : FRAMESIZE_QVGA;
+    // The driver's scale is 0 (best) .. 63; the contract's is 10..90 (best last).
+    auto driver_quality = [](int q) { return std::max(4, 63 - q * 63 / 100); };
+    std::vector<uint8_t> jpeg;
+    int w = 0, h = 0;
+    InvokeResult r = camera_take(size, driver_quality(quality), jpeg, w, h);
+    if (r.status == InvokeResult::Status::Ok && jpeg.size() > kMaxJpegBytes) {
+        r = camera_take(size, driver_quality(std::max(10, quality - 30)), jpeg, w, h);
+        if (r.status == InvokeResult::Status::Ok && jpeg.size() > kMaxJpegBytes) {
+            r = InvokeResult::failed("The picture is larger than 100000 bytes even at low quality", "image_too_large");
+        }
+    }
+    g_camera_busy = false;
+    if (r.status != InvokeResult::Status::Ok) return r;
+    uint8_t digest[32];
+    mbedtls_sha256(jpeg.data(), jpeg.size(), digest, 0);
+    static const char* hex = "0123456789abcdef";
+    std::string sha;
+    for (uint8_t b : digest) { sha += hex[b >> 4]; sha += hex[b & 15]; }
+    std::string out = "{\"content_type\":\"image/jpeg\",\"width\":" + std::to_string(w) + ",\"height\":" + std::to_string(h) +
+                      ",\"bytes\":" + std::to_string(jpeg.size()) + ",\"sha256\":\"" + sha + "\",\"data_base64\":\"" +
+                      dc_device::base64_encode(jpeg.data(), jpeg.size()) + "\"}";
+    return InvokeResult::success(std::move(out));
+}
 }  // namespace
 
 static const char* TAG = "dc-device";
@@ -437,6 +527,21 @@ extern "C" void app_main() {
     wb.expected_max_ms = 1500;
     endpoint.add(wb);
 
+    dc_device::esp32::CapabilitySpec cap;
+    cap.name = "camera.capture";
+    cap.description = "Take one picture and return it as a JPEG in data_base64.";
+    cap.kind = "sensor";
+    cap.parameters_json =
+        R"({"type":"object","properties":{"size":{"type":"string","enum":["qqvga","qvga","vga"]},)"
+        R"("quality":{"type":"integer","minimum":10,"maximum":90}},"required":[]})";
+    cap.returns_json = R"({"type":"object","properties":{"content_type":{"type":"string"},"width":{"type":"integer"},)"
+                       R"("height":{"type":"integer"},"bytes":{"type":"integer"},"sha256":{"type":"string"},)"
+                       R"("data_base64":{"type":"string","x_dc_payload":{"encoding":"base64","max_bytes":100000}}}})";
+    cap.handler = camera_capture;
+    cap.expected_typical_ms = 600;
+    cap.expected_max_ms = 4000;
+    endpoint.add(cap);
+
 #if !CONFIG_DC_DEVICE_RELEASE
     // Debugging aid: try a microphone on given pins. Drives sck and ws.
     dc_device::esp32::CapabilitySpec trial;
@@ -478,6 +583,77 @@ extern "C" void app_main() {
         return InvokeResult::success(buf);
     };
     endpoint.add(trial);
+
+    // Debugging aid: start the camera driver with the given settings, try to get a frame,
+    // report what happened, and stop the driver again. The wiring is the board's table.
+    dc_device::esp32::CapabilitySpec cam;
+    cam.name = "debug.camera_try";
+    cam.description = "Debug: start the camera driver with the given settings, take one frame, report, stop.";
+    cam.kind = "sensor";
+    cam.parameters_json =
+        R"({"type":"object","properties":{"xclk_pin":{"type":"integer"},"xclk_hz":{"type":"integer"},)"
+        R"("format":{"type":"string","enum":["jpeg","rgb565"]},"size":{"type":"string","enum":["qqvga","qvga","vga"]},)"
+        R"("fb_count":{"type":"integer"},"psram":{"type":"boolean"},"latest":{"type":"boolean"},)"
+        R"("quality":{"type":"integer"},"frames":{"type":"integer"}},"required":[]})";
+    cam.expected_max_ms = 15000;
+    cam.handler = [](const json::Value& a) {
+        auto geti = [&](const char* k, int d) { const json::Value* v = a.find(k); return v ? static_cast<int>(v->number) : d; };
+        auto gets = [&](const char* k, const char* d) { const json::Value* v = a.find(k); return v ? v->string : std::string(d); };
+        auto getb = [&](const char* k, bool d) { const json::Value* v = a.find(k); return v ? v->boolean : d; };
+        camera_config_t c{};
+        c.pin_pwdn = -1; c.pin_reset = -1;
+        c.pin_xclk = geti("xclk_pin", -1);
+        c.pin_sccb_sda = 4; c.pin_sccb_scl = 5;
+        c.pin_d0 = 11; c.pin_d1 = 9; c.pin_d2 = 8; c.pin_d3 = 10;
+        c.pin_d4 = 12; c.pin_d5 = 18; c.pin_d6 = 17; c.pin_d7 = 16;
+        c.pin_vsync = 6; c.pin_href = 7; c.pin_pclk = 13;
+        c.xclk_freq_hz = geti("xclk_hz", 24000000);
+        c.ledc_timer = LEDC_TIMER_0; c.ledc_channel = LEDC_CHANNEL_0;
+        const bool jpeg = gets("format", "jpeg") == "jpeg";
+        c.pixel_format = jpeg ? PIXFORMAT_JPEG : PIXFORMAT_RGB565;
+        const std::string size = gets("size", "qvga");
+        c.frame_size = size == "qqvga" ? FRAMESIZE_QQVGA : size == "vga" ? FRAMESIZE_VGA : FRAMESIZE_QVGA;
+        c.jpeg_quality = geti("quality", 15);
+        c.fb_count = geti("fb_count", 2);
+        c.fb_location = getb("psram", true) ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
+        c.grab_mode = getb("latest", true) ? CAMERA_GRAB_LATEST : CAMERA_GRAB_WHEN_EMPTY;
+        c.sccb_i2c_port = -1;
+        const int64_t t0 = esp_timer_get_time();
+        const esp_err_t e = esp_camera_init(&c);
+        char buf[700];
+        if (e != ESP_OK) {
+            snprintf(buf, sizeof(buf), "{\"init\":\"%s\",\"psram_bytes\":%u}", esp_err_to_name(e),
+                     static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM)));
+            return InvokeResult::success(buf);
+        }
+        const int64_t t_init = esp_timer_get_time() - t0;
+        int got = 0, first_len = 0, w = 0, h = 0;
+        char head[24] = "";
+        int64_t t_first = 0;
+        const int frames = geti("frames", 3);
+        for (int i = 0; i < frames; ++i) {
+            const int64_t t1 = esp_timer_get_time();
+            camera_fb_t* fb = esp_camera_fb_get();
+            if (fb == nullptr) break;
+            ++got;
+            if (got == 1) {
+                t_first = esp_timer_get_time() - t1;
+                first_len = static_cast<int>(fb->len); w = fb->width; h = fb->height;
+                snprintf(head, sizeof(head), "%02x%02x%02x%02x", fb->buf[0], fb->buf[1], fb->buf[2], fb->buf[3]);
+            }
+            esp_camera_fb_return(fb);
+        }
+        sensor_t* s = esp_camera_sensor_get();
+        const int pid = s ? s->id.PID : -1;
+        esp_camera_deinit();
+        snprintf(buf, sizeof(buf),
+                 "{\"init\":\"ok\",\"sensor_pid\":%d,\"init_ms\":%d,\"frames_asked\":%d,\"frames_got\":%d,"
+                 "\"first_frame_ms\":%d,\"len\":%d,\"width\":%d,\"height\":%d,\"head\":\"%s\",\"psram_bytes\":%u}",
+                 pid, static_cast<int>(t_init / 1000), frames, got, static_cast<int>(t_first / 1000), first_len, w, h,
+                 head, static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM)));
+        return InvokeResult::success(buf);
+    };
+    endpoint.add(cam);
 
     // Registered first: the safe state must exist before a time-limited capability.
     dc_device::esp32::CapabilitySpec release;
