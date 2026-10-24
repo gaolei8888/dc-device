@@ -366,7 +366,8 @@ camera_config_t camera_config(framesize_t size, int jpeg_quality) {
 InvokeResult camera_take(framesize_t size, int jpeg_quality, std::vector<uint8_t>& jpeg, int& width, int& height) {
     camera_config_t c = camera_config(size, jpeg_quality);
     const esp_err_t e = esp_camera_init(&c);
-    if (e == ESP_ERR_NOT_FOUND) return InvokeResult::failed("The camera sensor does not answer", "camera_not_found");
+    // No sensor on the bus: the driver says NOT_FOUND, or NOT_SUPPORTED when no camera was wired at all.
+    if (e == ESP_ERR_NOT_FOUND || e == ESP_ERR_NOT_SUPPORTED) return InvokeResult::failed("The camera sensor does not answer", "camera_not_found");
     if (e == ESP_ERR_NO_MEM) return InvokeResult::failed("Not enough memory for the camera frame buffers", "out_of_memory");
     if (e != ESP_OK) return InvokeResult::failed(std::string("The camera driver did not start (") + esp_err_to_name(e) + ")", "camera_init_failed");
     camera_fb_t* fb = nullptr;
@@ -392,6 +393,9 @@ InvokeResult camera_take(framesize_t size, int jpeg_quality, std::vector<uint8_t
 // carried detail. A sensor that answers on the bus proves nothing about the data lines.
 std::mutex g_probe_mu;
 bool g_probed = false;
+// Once a probe has found a picture with detail, camera.capture stays declared until the next boot.
+// Later probes (a dark room, a covered lens) only change the evidence, not the manifest.
+bool g_camera_declared = false;
 dc_device::esp32::Finding g_probe;  // the last probe, read by /manifest and by the quick check
 
 dc_device::esp32::Finding camera_probe_now() {
@@ -438,6 +442,7 @@ dc_device::esp32::Finding camera_probe_now() {
     std::lock_guard<std::mutex> lock(g_probe_mu);
     g_probed = true;
     g_probe = f;
+    if (f.verdict == dc_device::esp32::Verdict::Ok) g_camera_declared = true;
     return f;
 }
 
@@ -452,10 +457,9 @@ dc_device::esp32::Finding camera_last_probe() {
     return f;
 }
 
-void camera_boot_probe(void*) {
-    vTaskDelay(pdMS_TO_TICKS(8000));  // after Wi-Fi and the first self checks
-    camera_probe_now();
-    vTaskDelete(nullptr);
+bool camera_declared() {
+    std::lock_guard<std::mutex> lock(g_probe_mu);
+    return g_camera_declared;
 }
 
 InvokeResult camera_capture(const json::Value& args) {
@@ -614,7 +618,7 @@ extern "C" void app_main() {
                        R"("height":{"type":"integer"},"bytes":{"type":"integer"},"sha256":{"type":"string"},)"
                        R"("data_base64":{"type":"string","x_dc_payload":{"encoding":"base64","max_bytes":100000}}}})";
     cap.handler = camera_capture;
-    cap.available = [] { return camera_last_probe().verdict == dc_device::esp32::Verdict::Ok; };
+    cap.available = [] { return camera_declared(); };
     cap.expected_typical_ms = 600;
     cap.expected_max_ms = 4000;
     endpoint.add(cap);
@@ -814,7 +818,9 @@ extern "C" void app_main() {
         "screen", "SCK 46, MOSI 3, DC 1, CS 14", "known_map", "screen.fill_test",
         "Did the screen turn red, then green, then blue, then black?"));
     dc_device::esp32::attach_self_check(endpoint, self_check);
-    xTaskCreate(camera_boot_probe, "cam_probe", 8192, nullptr, 3, nullptr);
+    // Take the picture before the HTTP server can start, so the first /manifest a host reads
+    // already has the final answer about camera.capture.
+    camera_probe_now();
 
     dc_device::esp32::Identity id;
     id.model = "ESP32-S3 Camera Board";
