@@ -2,13 +2,30 @@
 
 Status: APPROVED by the owner on 2026-10-22 (camera.capture, screen.write_block with
 screen.draw_rect, and the expected-duration field with error `code`). Built so far: the error
-`code`, `expected_duration_ms`, `screen.draw_rect` and `screen.write_block`. Not built:
-`camera.capture` (the camera driver has never delivered a frame on 6740).
+`code`, `expected_duration_ms`, `screen.draw_rect`, `screen.write_block` and (2026-10-23)
+`camera.capture`: JPEG at qqvga, qvga and vga on 6740, declared only after the board took a
+picture itself and the picture carried detail.
 Boards are named by serial tail: **6740** = camera only; **6718** = screen (240x320) and
 speaker. Goal behind it: a picture taken by 6740 shown on 6718, relayed by the host (DC);
 the boards never talk to each other.
 
 What is a fact and what is a guess is marked. Anything marked GUESS has not been measured.
+
+## Camera findings (2026-10-23, measured on 6740)
+
+- The earlier `EV-VSYNC-OVF` was caused by PSRAM not being enabled: the frame buffers could not
+  live in PSRAM. With 8 MB octal PSRAM on (`CONFIG_SPIRAM_MODE_OCT`, 80 MHz) and **no clock pin
+  driven** (the module has its own oscillator), JPEG frames arrive at every size. RGB565 still
+  delivers no frame; JPEG is what the contract uses.
+- Extra error code in use: `camera_init_failed` (the driver did not start, for a reason other than
+  no sensor or no memory).
+- The declaration rule is as written below, with these limits: it takes one picture at boot (about
+  8 s after start) and on every self test, and judges brightness values after decoding at 1/8 size.
+  It refuses a stuck or uniform picture. A lens covered by a hand, or a dim room, still shows detail
+  and is declared (measured: covered lens gave spread 22.6 against 40.2 uncovered). The owner chose to
+  keep this rule (2026-10-23).
+- Measured: vga at quality 80 took 2.9 s end to end over Wi-Fi (13 KB JPEG); `/self_test` takes more
+  than 40 s on 6740 (hosts must allow for it).
 
 ## What exists today (facts from the code)
 

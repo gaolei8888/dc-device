@@ -8,6 +8,7 @@
 #include <string>
 
 #include "dc_device_audio_analysis.hpp"
+#include "dc_device_image_analysis.hpp"
 #include "dc_device_base64.hpp"
 #include "dc_device_screen_blocks.hpp"
 #include "dc_device_chip.hpp"
@@ -1214,6 +1215,23 @@ static void test_expected_duration() {
 
 // A parameter may carry the host's `x_dc_payload` hint (the argument is bulk data, not text for a
 // person). The manifest passes it through and argument validation ignores the unknown keyword.
+static void test_image_analysis() {
+    using namespace dc_device::esp32;
+    std::string ev;
+    CHECK(judge_frame(analyze_gray(nullptr, 0), ev) == Verdict::Failed);
+    std::vector<uint8_t> flat(1000, 0);
+    CHECK(judge_frame(analyze_gray(flat.data(), flat.size()), ev) == Verdict::Failed);
+    CHECK(ev.find("stuck") != std::string::npos);
+    std::vector<uint8_t> dark(1000, 3);
+    dark[10] = 4;  // sensor noise only
+    CHECK(judge_frame(analyze_gray(dark.data(), dark.size()), ev) == Verdict::Unverified);
+    std::vector<uint8_t> ramp(1000);
+    for (size_t i = 0; i < ramp.size(); ++i) ramp[i] = static_cast<uint8_t>(i % 256);
+    ImageStats st = analyze_gray(ramp.data(), ramp.size());
+    CHECK(st.min == 0 && st.max == 255 && st.pixels == 1000);
+    CHECK(judge_frame(st, ev) == Verdict::Ok);
+}
+
 static void test_payload_hint() {
     Endpoint ep("b", "t", "n");
     CapabilitySpec wb;
@@ -1522,6 +1540,7 @@ int main() {
     test_error_codes();
     test_expected_duration();
     test_payload_hint();
+    test_image_analysis();
     test_base64();
     test_screen_blocks();
     test_capability_availability();

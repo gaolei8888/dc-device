@@ -18,5 +18,6 @@ ${CXX:-c++} -std=c++17 -Wall -Wextra -Werror \
     platforms/esp32/src/dc_device_pins.cpp \
     platforms/esp32/src/dc_device_i2c_ids.cpp \
     platforms/esp32/src/dc_device_audio_analysis.cpp \
+    platforms/esp32/src/dc_device_image_analysis.cpp \
     -o "$OUT"
 "$OUT"

@@ -13,6 +13,7 @@
 #include "dc_device_base64.hpp"
 #include "dc_device_declared_parts.hpp"
 #include "dc_device_i2c_detect.hpp"
+#include "dc_device_image_analysis.hpp"
 #include "dc_device_parts_nvs.hpp"
 #include "dc_device_screen_blocks.hpp"
 #include "dc_device_mic_detect.hpp"
@@ -30,8 +31,12 @@
 #include "driver/i2s_std.h"
 #include "driver/spi_master.h"
 #include "esp_camera.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "jpeg_decoder.h"
 #include "mbedtls/sha256.h"
 #include <atomic>
+#include <mutex>
 #include "esp_heap_caps.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -382,6 +387,77 @@ InvokeResult camera_take(framesize_t size, int jpeg_quality, std::vector<uint8_t
     return InvokeResult::success();
 }
 
+// ---- honest declaration -----------------------------------------------------------------
+// camera.capture is declared only after this board took a picture itself and the picture
+// carried detail. A sensor that answers on the bus proves nothing about the data lines.
+std::mutex g_probe_mu;
+bool g_probed = false;
+dc_device::esp32::Finding g_probe;  // the last probe, read by /manifest and by the quick check
+
+dc_device::esp32::Finding camera_probe_now() {
+    using dc_device::esp32::Verdict;
+    dc_device::esp32::Finding f;
+    f.name = "camera_image";
+    f.klass = dc_device::esp32::PeripheralClass::Signal;
+    f.wiring = "SCCB 4/5, D0-D7 11,9,8,10,12,18,17,16, PCLK 13, VSYNC 6, HREF 7, no XCLK pin";
+    f.source = "known_map";
+    if (g_camera_busy.exchange(true)) {
+        std::lock_guard<std::mutex> lock(g_probe_mu);
+        return g_probe;  // a capture is running: keep the last answer
+    }
+    std::vector<uint8_t> jpeg;
+    int w = 0, h = 0;
+    InvokeResult r = camera_take(FRAMESIZE_QVGA, 20, jpeg, w, h);
+    if (r.status != InvokeResult::Status::Ok) {
+        f.verdict = r.code == "camera_not_found" ? Verdict::NotFound : Verdict::Failed;
+        f.evidence = r.message + " (" + r.code + ")";
+    } else {
+        // Decode at 1/8 size (40 x 30) and judge the brightness values.
+        const size_t out_size = static_cast<size_t>((w + 7) / 8) * ((h + 7) / 8) * 3;
+        std::vector<uint8_t> rgb(out_size + 16);
+        esp_jpeg_image_cfg_t cfg{};
+        cfg.indata = jpeg.data();
+        cfg.indata_size = static_cast<uint32_t>(jpeg.size());
+        cfg.outbuf = rgb.data();
+        cfg.outbuf_size = static_cast<uint32_t>(rgb.size());
+        cfg.out_format = JPEG_IMAGE_FORMAT_RGB888;
+        cfg.out_scale = JPEG_IMAGE_SCALE_1_8;
+        esp_jpeg_image_output_t out{};
+        if (esp_jpeg_decode(&cfg, &out) != ESP_OK || out.output_len < 3) {
+            f.verdict = Verdict::Failed;
+            f.evidence = "a frame arrived but it is not a decodable JPEG";
+        } else {
+            std::vector<uint8_t> gray(out.output_len / 3);
+            for (size_t i = 0; i < gray.size(); ++i) {
+                gray[i] = static_cast<uint8_t>((rgb[3 * i] * 30 + rgb[3 * i + 1] * 59 + rgb[3 * i + 2] * 11) / 100);
+            }
+            f.verdict = dc_device::esp32::judge_frame(dc_device::esp32::analyze_gray(gray.data(), gray.size()), f.evidence);
+        }
+    }
+    g_camera_busy = false;
+    std::lock_guard<std::mutex> lock(g_probe_mu);
+    g_probed = true;
+    g_probe = f;
+    return f;
+}
+
+dc_device::esp32::Finding camera_last_probe() {
+    std::lock_guard<std::mutex> lock(g_probe_mu);
+    if (g_probed) return g_probe;
+    dc_device::esp32::Finding f;
+    f.name = "camera_image";
+    f.klass = dc_device::esp32::PeripheralClass::Signal;
+    f.verdict = dc_device::esp32::Verdict::Unverified;
+    f.evidence = "no picture has been taken since boot";
+    return f;
+}
+
+void camera_boot_probe(void*) {
+    vTaskDelay(pdMS_TO_TICKS(8000));  // after Wi-Fi and the first self checks
+    camera_probe_now();
+    vTaskDelete(nullptr);
+}
+
 InvokeResult camera_capture(const json::Value& args) {
     std::string size_name = "qvga";
     if (const json::Value* v = args.find("size")) size_name = v->string;
@@ -538,6 +614,7 @@ extern "C" void app_main() {
                        R"("height":{"type":"integer"},"bytes":{"type":"integer"},"sha256":{"type":"string"},)"
                        R"("data_base64":{"type":"string","x_dc_payload":{"encoding":"base64","max_bytes":100000}}}})";
     cap.handler = camera_capture;
+    cap.available = [] { return camera_last_probe().verdict == dc_device::esp32::Verdict::Ok; };
     cap.expected_typical_ms = 600;
     cap.expected_max_ms = 4000;
     endpoint.add(cap);
@@ -712,6 +789,16 @@ extern "C" void app_main() {
     self_check.add(optional(dc_device::esp32::make_i2c_detector({})));
 #endif
     self_check.add(optional(dc_device::esp32::make_pin_survey_detector()));
+    {
+        // Quick answers from the last picture; only a self test takes a new one.
+        dc_device::esp32::Detector cam_det;
+        cam_det.name = "camera_image";
+        cam_det.klass = dc_device::esp32::PeripheralClass::Signal;
+        cam_det.run = [](dc_device::esp32::Mode mode) {
+            return mode == dc_device::esp32::Mode::Full ? camera_probe_now() : camera_last_probe();
+        };
+        self_check.add(optional(cam_det));
+    }
     // The speaker is the sound source that tells a microphone from a pin that just moves.
     // This makes a self test audible on a board that has a microphone.
     dc_device::esp32::MicStimulus stimulus;
@@ -727,6 +814,7 @@ extern "C" void app_main() {
         "screen", "SCK 46, MOSI 3, DC 1, CS 14", "known_map", "screen.fill_test",
         "Did the screen turn red, then green, then blue, then black?"));
     dc_device::esp32::attach_self_check(endpoint, self_check);
+    xTaskCreate(camera_boot_probe, "cam_probe", 8192, nullptr, 3, nullptr);
 
     dc_device::esp32::Identity id;
     id.model = "ESP32-S3 Camera Board";
