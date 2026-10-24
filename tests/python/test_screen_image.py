@@ -69,7 +69,7 @@ def test_show_image_sends_twenty_strips_with_pauses():
         assert cap == "screen.write_block"
         assert (args["x"], args["y"], args["width"], args["height"]) == (0, i * 16, 240, 16)
         assert len(base64.b64decode(args["data_base64"])) == 240 * 16 * 2
-    assert len(sleeps) == 19 and all(s >= 0.05 for s in sleeps)  # 50 ms is the rate limit
+    assert len(sleeps) == 19 and all(s >= 0.1 for s in sleeps)  # 100 ms: DC's limit (10 a second); the device's own is 50 ms
 
 
 def test_rate_limited_block_is_retried_after_a_pause():

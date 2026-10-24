@@ -427,7 +427,9 @@ extern "C" void app_main() {
         "(high byte first), at most 7680 bytes, as base64 in data_base64.";
     wb.kind = "action";
     wb.parameters_json = std::string(R"({"type":"object","properties":{)") + rect_props +
-                         R"(,"data_base64":{"type":"string"}},"required":["x","y","width","height","data_base64"]})";
+                         R"(,"data_base64":{"type":"string",)"
+                         R"("x_dc_payload":{"encoding":"base64","max_bytes":7680}}},)"
+                         R"("required":["x","y","width","height","data_base64"]})";
     wb.safety_json = R"({"max_rate_hz":20})";
     wb.handler = screen_write_block;
     wb.available = dc_device::esp32::available_when_confirmed(self_check, "screen", declared_parts);

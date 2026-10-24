@@ -81,6 +81,15 @@ A POST body larger than the device's limit is refused with 413. The default limi
 the camera_board example raises it to 12288 so that one `screen.write_block` (at most 7680 pixel
 bytes, about 10.3 KB as base64) fits.
 
+### Bulk data hint: `x_dc_payload`
+
+A parameter in `/manifest` may carry `"x_dc_payload":{"encoding":"base64","max_bytes":N}`. It says
+the argument is bulk data (for example pixels), not text meant for a person, and that it is at most
+`N` bytes before encoding. A host may then pass it through larger than its usual per-argument limit,
+keep it out of what it shows people, and log only a summary. A device ignores the keyword when it
+validates arguments; it still enforces `max_bytes` itself in the handler. `screen.write_block`'s
+`data_base64` carries it (`max_bytes` 7680).
+
 ## Design rule
 
 Transport is not part of the capability semantics.

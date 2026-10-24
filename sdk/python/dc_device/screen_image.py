@@ -17,7 +17,7 @@ from urllib.error import HTTPError
 SCREEN_WIDTH = 240
 SCREEN_HEIGHT = 320
 BLOCK_ROWS = 16  # 240 x 16 x 2 bytes = 7680, the device's per-call limit
-MIN_PAUSE_S = 0.06  # the device allows 20 calls a second; 60 ms leaves margin
+MIN_PAUSE_S = 0.1  # the device allows 20 calls a second; DC lets an action through at most 10 a second
 
 
 class ScreenError(Exception):

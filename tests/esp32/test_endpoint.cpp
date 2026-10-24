@@ -1212,6 +1212,26 @@ static void test_expected_duration() {
     CHECK(ep.manifest().find(R"("expected_duration_ms":{"max":2000})") != std::string::npos);
 }
 
+// A parameter may carry the host's `x_dc_payload` hint (the argument is bulk data, not text for a
+// person). The manifest passes it through and argument validation ignores the unknown keyword.
+static void test_payload_hint() {
+    Endpoint ep("b", "t", "n");
+    CapabilitySpec wb;
+    wb.name = "screen.write_block";
+    wb.description = "x";
+    wb.kind = "action";
+    wb.parameters_json =
+        R"({"type":"object","properties":{"data_base64":{"type":"string",)"
+        R"("x_dc_payload":{"encoding":"base64","max_bytes":7680}}},"required":["data_base64"]})";
+    wb.handler = [](const json::Value&) { return InvokeResult::success(); };
+    CHECK(ep.add(wb));
+    CHECK(ep.manifest().find(R"("x_dc_payload":{"encoding":"base64","max_bytes":7680})") != std::string::npos);
+    Response r = ep.handle("POST", "/invoke", R"({"capability":"screen.write_block","arguments":{"data_base64":"AAAA"}})");
+    CHECK(r.status == 200);
+    r = ep.handle("POST", "/invoke", R"({"capability":"screen.write_block","arguments":{"data_base64":5}})");
+    CHECK(r.status == 400);
+}
+
 static void test_base64() {
     auto enc = [](const std::string& s) { return base64_encode(reinterpret_cast<const uint8_t*>(s.data()), s.size()); };
     // RFC 4648 section 10.
@@ -1501,6 +1521,7 @@ int main() {
     test_setup_protocol();
     test_error_codes();
     test_expected_duration();
+    test_payload_hint();
     test_base64();
     test_screen_blocks();
     test_capability_availability();
