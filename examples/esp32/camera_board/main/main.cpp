@@ -620,7 +620,7 @@ extern "C" void app_main() {
     cap.handler = camera_capture;
     cap.available = [] { return camera_declared(); };
     cap.expected_typical_ms = 600;
-    cap.expected_max_ms = 4000;
+    cap.expected_max_ms = 15000;
     endpoint.add(cap);
 
 #if !CONFIG_DC_DEVICE_RELEASE

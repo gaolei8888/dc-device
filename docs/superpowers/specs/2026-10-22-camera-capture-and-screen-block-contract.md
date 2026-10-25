@@ -98,7 +98,7 @@ Rules:
 - A picture of a home is private. It crosses the network in cleartext in this step (HTTP,
   token-protected but not encrypted); that limit is stated in the token design. Whether DC
   asks the user each time is DC's decision (`requires_confirmation` is a caller rule).
-- Expected duration (section 3): typical 600 ms, max 4000 ms (GUESS).
+- Expected duration (section 3): typical 600 ms, max 15000 ms (measured outliers up to 12 s; raised from 4000 on 2026-10-24).
 
 Camera bring-up is a research task, not a contract item: the order of attempts for
 `EV-VSYNC-OVF` (clock pin and frequency setting for a module that has its own oscillator,
@@ -147,7 +147,7 @@ base64; 400).
 Each capability may carry an optional, read-only field in `/manifest`:
 
 ```json
-"expected_duration_ms": {"typical": 600, "max": 4000}
+"expected_duration_ms": {"typical": 600, "max": 15000}
 ```
 
 - It tells a host how long to wait before calling the result unknown. It enforces nothing and
