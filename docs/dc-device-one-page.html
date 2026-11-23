@@ -1,0 +1,121 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>dc-device 优势与场景</title>
+<style>
+@page{size:A4 landscape;margin:8mm}
+:root{--fg:#1b2430;--muted:#5a6573;--line:#cfd6df;--accent:#12355b;--soft:#e4ebf3;--plan:#8a5a12;--plansoft:#f3ead9;
+--f:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+*{box-sizing:border-box}
+html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{zoom:.88;margin:0;color:var(--fg);font-family:var(--f);font-size:12px;line-height:1.55;width:1207px}
+header{background:var(--accent);color:#fff;padding:16px 24px 14px;display:flex;justify-content:space-between;align-items:flex-end}
+h1{margin:0;font-size:28px;letter-spacing:.05em;line-height:1.2}
+.sub{font-size:14px;opacity:.92;margin-top:4px;letter-spacing:.08em}
+.tag{font-size:11px;opacity:.85;text-align:right}
+h2{font-size:15px;margin:16px 0 8px;color:var(--accent);letter-spacing:.1em;border-bottom:2px solid var(--accent);padding-bottom:3px}
+.g{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.adv{border:1px solid var(--line);padding:9px 12px;display:flex;gap:10px}
+.ic{flex:none;width:34px;height:34px;color:var(--accent)}
+.adv b{display:block;font-size:13.5px;color:var(--accent)}
+.adv span{color:var(--muted);font-size:11.5px}
+.sc{border:1px solid var(--line);border-top:3px solid var(--accent);padding:10px 12px 10px;display:flex;flex-direction:column;gap:6px}
+.sc.p{border-top-color:var(--plan)}
+.sc b{font-size:14px}
+.chip{display:inline-block;font-size:10px;font-weight:600;padding:0 8px;border-radius:9px;background:var(--soft);color:var(--accent);margin-left:6px;vertical-align:1px}
+.chip.p{background:var(--plansoft);color:var(--plan)}
+.sc p{margin:0;font-size:11.5px}
+.flow{display:flex;align-items:center;gap:4px;margin-top:auto;flex-wrap:nowrap}
+.flow i{font-style:normal;font-size:10px;background:var(--soft);color:var(--accent);padding:2px 6px;border-radius:3px;white-space:nowrap}
+.flow u{text-decoration:none;color:var(--muted);font-size:10px}
+.sc.p .flow i{background:var(--plansoft);color:var(--plan)}
+footer{margin-top:6px;font-size:10px;color:var(--muted);border-top:1px solid var(--line);padding-top:4px}
+
+.a6{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+.a6 .adv{flex-direction:column;gap:3px;padding:7px 10px;align-self:start;height:auto}
+.a6 .ic{width:26px;height:26px}
+.a6 .adv b{font-size:12.5px}.a6 .adv span{font-size:10.5px;line-height:1.45}
+.pr{display:grid;grid-template-columns:450px 1fr;gap:18px;align-items:start}
+.pr svg{display:block;width:100%;height:auto;color:var(--fg)}
+svg text{font-family:var(--f);fill:currentColor;font-size:11px}
+svg .t{font-size:11.5px;font-weight:600}svg .s{font-size:9.5px;fill:var(--muted)}svg .m{font-family:ui-monospace,Menlo,monospace;font-size:9.5px}
+svg .box{fill:#fff;stroke:currentColor;stroke-width:1.2}svg .dev{fill:var(--soft);stroke:var(--accent);stroke-width:1.6}
+svg .acc{stroke:var(--accent);fill:none;stroke-width:1.6}svg .ln{stroke:currentColor;fill:none;stroke-width:1.2}
+svg .dash{stroke:currentColor;fill:none;stroke-width:1.2;stroke-dasharray:4 3}
+svg .good{fill:var(--soft);stroke:var(--accent);stroke-width:1.2}svg .nope{fill:var(--plansoft);stroke:var(--plan);stroke-width:1.2}
+.steps{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;margin-bottom:8px}
+.st{display:flex;gap:7px}.n{flex:none;width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;text-align:center;line-height:20px;margin-top:1px}
+.st b{display:block;font-size:12px;color:var(--accent)}.st span{font-size:10.5px;color:var(--muted);line-height:1.45;display:block}
+.cap{font-size:10px;color:var(--muted);margin:2px 0 0}
+.sc{padding:7px 10px 8px;gap:4px}.sc b{font-size:12.5px}.sc p{font-size:10.5px;line-height:1.45}
+h2{margin:11px 0 6px}
+header{padding:12px 22px 10px}h1{font-size:25px}.sub{font-size:13px}
+.row{display:flex;gap:10px;height:100%}.col{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
+.si{flex:none;width:46px;height:42px;color:var(--accent);margin-top:2px}.sc.p .si{color:var(--plan)}
+.plat{display:flex;gap:6px;align-items:center;margin:2px 0 6px;font-size:10.5px}
+.plat span.l{color:var(--muted)}.plat i{font-style:normal;font-weight:600;border:1px solid var(--accent);color:var(--accent);padding:1px 8px;border-radius:10px}
+.plat i.p{border-color:var(--plan);color:var(--plan)}.plat i.r{background:var(--soft)}
+.hero{width:330px;height:auto;margin-left:auto;margin-right:18px;align-self:center}
+header{padding:8px 22px 8px}
+</style></head><body>
+<header><div><h1>dc-device　硬件能力平台</h1><div class="sub">把各种大模型引入边缘计算平台，安全、可信地使用真实硬件</div></div><svg class="hero" viewBox="0 0 420 70" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="设备示意：摄像头板、屏幕板、Linux 设备、更多设备">
+<g><rect x="4" y="14" width="64" height="42" rx="4"/><circle cx="36" cy="35" r="11"/><circle cx="36" cy="35" r="4"/><path d="M12 14v-5M24 14v-5"/></g>
+<g><rect x="104" y="6" width="44" height="58" rx="4"/><rect x="110" y="12" width="32" height="34" rx="1"/><path d="M112 40l8-9 6 6 5-5 9 8"/><path d="M118 55h12"/></g>
+<g><rect x="190" y="12" width="76" height="46" rx="3"/><path d="M200 22h18M200 30h30M200 38h24"/><path d="M180 64h96"/></g>
+<g><rect x="316" y="14" width="40" height="40" rx="4" stroke-dasharray="4 3"/><path d="M326 14v-6M336 14v-6M346 14v-6M326 54v6M336 54v6M346 54v6"/><text x="336" y="39" fill="#fff" stroke="none" font-size="11" text-anchor="middle">?</text></g>
+</svg><div class="tag">产品简介　·　2026 年 11 月</div></header>
+
+<h2>核心优势</h2>
+<div class="a6">
+<div class="adv"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M8.5 12l2.5 2.5L15.5 9.5"/></svg><div><b>可信的能力清单</b><span>只声明亲自验证过的能力。没有摄像头就没有拍照按钮。</span></div></div>
+<div class="adv"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg><div><b>设备端安全保障</b><span>限速、最长时长、回到安全状态、紧急停止，由设备自己执行。</span></div></div>
+<div class="adv"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v9h14v-9"/><path d="M10 19v-5h4v5"/></svg><div><b>局域网私有部署</b><span>设备与桌面全在局域网内通信，不经过云服务。</span></div></div>
+<div class="adv"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><div><b>自检透明，不装正常</b><span>逐项给出正常、失败、未验证、未发现，看不见的部件请人确认。</span></div></div>
+<div class="adv"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c1-4 4-6 7-6s6 2 7 6"/></svg><div><b>使用者无需懂硬件</b><span>USB 配一次网络即可。不必懂引脚接线，出问题用人话说明。</span></div></div>
+<div class="adv"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="8.5" y="14" width="7" height="6" rx="1"/><path d="M6.5 11v1.5h11V11M12 12.5V14"/></svg><div><b>开放统一的接入契约</b><span>统一 HTTP 接口，不绑定某个大模型；不同设备同一方式接入。</span></div></div>
+</div>
+
+<h2>系统原理</h2>
+<div class="pr"><div><svg viewBox="0 0 520 270" role="img" aria-label="用户和AI经硬件工作台和DC桌面，通过局域网HTTP调用板子上的dc-device，USB只用于配网和刷机">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+<rect class="box" x="0" y="0" width="140" height="42" rx="6"/><text class="t" x="70" y="18" text-anchor="middle">大模型 / 用户</text><text class="s" x="70" y="33" text-anchor="middle">提出要做什么</text>
+<rect class="box" x="190" y="0" width="140" height="42" rx="6"/><text class="t" x="260" y="18" text-anchor="middle">硬件工作台</text><text class="s" x="260" y="33" text-anchor="middle">按清单自动出界面</text>
+<rect class="box" x="380" y="0" width="140" height="42" rx="6"/><text class="t" x="450" y="18" text-anchor="middle">DC 桌面</text><text class="s" x="450" y="33" text-anchor="middle">批准 · 限速 · 超时</text>
+<line class="ln" x1="142" y1="21" x2="188" y2="21" marker-end="url(#a)"/><line class="ln" x1="332" y1="21" x2="378" y2="21" marker-end="url(#a)"/>
+<line class="acc" x1="450" y1="44" x2="450" y2="78" marker-end="url(#a)"/><text class="s" x="442" y="64" text-anchor="end">HTTP · 局域网</text>
+<rect class="dev" x="170" y="80" width="350" height="128" rx="8"/>
+<text class="t" x="182" y="98">设备端 dc-device（以 ESP32 为例，可支持多平台）</text>
+<text class="m" x="182" y="116">/identity   身份</text><text class="m" x="182" y="130">/manifest   能力清单</text><text class="m" x="182" y="144">/status     健康状态</text>
+<text class="m" x="352" y="116">/self_test  自检</text><text class="m" x="352" y="130">/invoke     执行动作</text>
+<text class="s" x="182" y="170">限速 · 最长时长 · 安全态 · 急停：由设备本身执行</text>
+<text class="s" x="182" y="186">清单只写自己验证过的能力</text>
+<rect class="box" x="0" y="110" width="120" height="42" rx="6"/><text class="t" x="60" y="128" text-anchor="middle">USB 线</text><text class="s" x="60" y="143" text-anchor="middle">配网 · 认人 · 刷机</text>
+<line class="dash" x1="122" y1="131" x2="168" y2="131" marker-end="url(#a)"/>
+<line class="ln" x1="230" y1="210" x2="230" y2="228"/><line class="ln" x1="345" y1="210" x2="345" y2="228"/><line class="ln" x1="460" y1="210" x2="460" y2="228"/>
+<rect class="box" x="185" y="230" width="90" height="34" rx="5"/><text x="230" y="251" text-anchor="middle">摄像头</text>
+<rect class="box" x="300" y="230" width="90" height="34" rx="5"/><text x="345" y="251" text-anchor="middle">屏幕</text>
+<rect class="box" x="415" y="230" width="90" height="34" rx="5"/><text x="460" y="251" text-anchor="middle">扬声器</text>
+</svg><p class="cap">实线为日常使用路径，虚线为 USB（仅配网与刷机）。设备只回答与执行，谁有权使用由桌面侧决定。</p></div>
+<div><div class="plat"><span class="l">支持平台</span><i class="r">ESP32 · 已验证</i><i>Linux · 仿真参考</i><i class="p">更多平台 · 规划中</i></div><div class="steps">
+<div class="st"><div class="n">1</div><div><b>接入</b><span>用 USB 把设备接入局域网，设备报出稳定的身份，桌面核对后登记。</span></div></div>
+<div class="st"><div class="n">2</div><div><b>自检与声明</b><span>设备自己检查外设，只把验证过的能力写进“能力清单”。</span></div></div>
+<div class="st"><div class="n">3</div><div><b>授权调用</b><span>大模型经桌面软件提出动作，用户批准，桌面限速并设超时。</span></div></div>
+<div class="st"><div class="n">4</div><div><b>设备执行并守安全</b><span>设备校验参数、限速，超时自动回到安全状态，再返回结果。</span></div></div>
+</div><svg viewBox="0 0 520 118" style="margin-top:2px" role="img" aria-label="开机自己拍一张，有细节才声明拍照能力，否则不声明并写明原因">
+<rect class="box" x="0" y="38" width="80" height="40" rx="6"/><text class="t" x="40" y="55" text-anchor="middle">开机</text><text class="s" x="40" y="69" text-anchor="middle">服务启动前</text>
+<rect class="box" x="104" y="38" width="110" height="40" rx="6"/><text class="t" x="159" y="55" text-anchor="middle">自己拍一张</text><text class="s" x="159" y="69" text-anchor="middle">看亮度分布</text>
+<rect class="box" x="238" y="38" width="110" height="40" rx="6"/><text class="t" x="293" y="55" text-anchor="middle">画面有细节？</text><text class="s" x="293" y="69" text-anchor="middle">非死黑非纯色</text>
+<rect class="good" x="376" y="4" width="144" height="42" rx="6"/><text class="t" x="448" y="21" text-anchor="middle">写进清单</text><text class="s" x="448" y="36" text-anchor="middle">camera.capture · 开机内保持</text>
+<rect class="nope" x="376" y="72" width="144" height="42" rx="6"/><text class="t" x="448" y="89" text-anchor="middle">不声明</text><text class="s" x="448" y="104" text-anchor="middle">状态里写明原因</text>
+<line class="ln" x1="82" y1="58" x2="102" y2="58" marker-end="url(#a)"/><line class="ln" x1="216" y1="58" x2="236" y2="58" marker-end="url(#a)"/>
+<path class="acc" d="M350 52 L363 52 L363 25 L374 25" marker-end="url(#a)"/><text class="s" x="352" y="42">是</text>
+<path class="ln" d="M350 64 L363 64 L363 93 L374 93" marker-end="url(#a)"/><text class="s" x="352" y="90">否</text>
+</svg><p class="cap">可信声明示例：开机先自己拍一张，画面有细节才声明拍照能力，否则不声明并写明原因。</p></div></div>
+<h2>应用场景</h2>
+<div class="g">
+<div class="sc"><div class="row"><svg class="si" viewBox="0 0 48 44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="12" width="28" height="20" rx="3"/><circle cx="18" cy="22" r="6"/><path d="M12 12l2-4h8l2 4"/><path d="M36 14l8-4v24l-8-4"/></svg><div class="col"><b>远程现场查看<span class="chip">已验证</span></b><p>适用于实验室、门店、库房等场所。让 AI 调用摄像头拍照，描述画面、确认现场状态，无需人到场。</p><div class="flow"><i>AI 提问</i><u>›</u><i>用户批准</i><u>›</u><i>摄像头拍照</i><u>›</u><i>图片回传</i></div></div></div></div>
+<div class="sc"><div class="row"><svg class="si" viewBox="0 0 48 44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="32" height="26" rx="2"/><path d="M12 26l7-8 5 5 4-4 6 7"/><path d="M16 38h12M22 32v6"/></svg><div class="col"><b>智能展示与看板<span class="chip">已验证</span></b><p>把 AI 生成的图片和状态信息推送到独立屏幕，用于展台、会议室、教室，自动裁切适配屏幕。</p><div class="flow"><i>图片</i><u>›</u><i>自动裁切</i><u>›</u><i>分块发送</i><u>›</u><i>屏幕显示</i></div></div></div></div>
+<div class="sc"><div class="row"><svg class="si" viewBox="0 0 48 44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="12" width="16" height="18" rx="2"/><circle cx="10" cy="21" r="4"/><rect x="30" y="8" width="14" height="26" rx="2"/><path d="M20 21h8M25 18l3 3-3 3"/></svg><div class="col"><b>多设备协同<span class="chip">已验证</span></b><p>一台设备负责采集，另一台负责呈现，通过同一套接口编排。摄像头拍到的画面已在另一块屏幕上完整显示。</p><div class="flow"><i>采集设备</i><u>›</u><i>处理</i><u>›</u><i>展示设备</i></div></div></div></div>
+<div class="sc"><div class="row"><svg class="si" viewBox="0 0 48 44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="5" width="28" height="36" rx="3"/><path d="M14 16l3 3 6-6M14 28l3 3 6-6M27 17h5M27 29h5"/></svg><div class="col"><b>设备交付验收与排错<span class="chip">已验证</span></b><p>一键自检给出可核实的健康报告，哪里读到了、哪里没读到一目了然，交付前检查和现场排错都更省力。</p><div class="flow"><i>一键自检</i><u>›</u><i>逐项结论</i><u>›</u><i>健康报告</i></div></div></div></div>
+<div class="sc"><div class="row"><svg class="si" viewBox="0 0 48 44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="16" cy="12" r="5"/><path d="M6 36c1-8 5-12 10-12s9 4 10 12"/><rect x="30" y="20" width="14" height="14" rx="2"/><path d="M34 16v4M40 16v4M34 34v4M40 34v4"/></svg><div class="col"><b>教学与创客实训<span class="chip">已验证</span></b><p>学生接入硬件后即可被 AI 使用，不必先学底层驱动；哪里没接好，自检用人话说明。</p><div class="flow"><i>接入</i><u>›</u><i>自检</i><u>›</u><i>授权</i><u>›</u><i>使用</i></div></div></div></div>
+<div class="sc p"><div class="row"><svg class="si" viewBox="0 0 48 44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="14" cy="26" r="8"/><path d="M14 18v-8M6 26H2M26 26h4"/><path d="M32 16c4 0 8 4 8 8M32 10c8 0 14 6 14 14"/></svg><div class="col"><b>传感器与执行器扩展<span class="chip p">规划中</span></b><p>温湿度、距离、舵机、电机等，按风险从低到高逐步接入。每种都需实物验证后才对外开放。</p><div class="flow"><i>只读传感器</i><u>›</u><i>低风险输出</i><u>›</u><i>会动的部件</i></div></div></div></div>
+</div>
+<footer>接口契约、Python 与 JavaScript SDK、参考实现随项目提供。“已验证”指已在真实硬件上跑通；“规划中”尚无实物验证，不对外承诺。</footer>
+</body></html>
