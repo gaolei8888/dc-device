@@ -10,8 +10,10 @@
 #include <string>
 
 #include "dc_device_i2c_detect.hpp"
+#include "dc_device_image_analysis.hpp"
 #include "dc_device_mic_detect.hpp"
 #include "dc_device_pin_survey.hpp"
+#include "dc_device_screen_rect.hpp"
 #include <vector>
 #include "dc_device_chip.hpp"
 #include "dc_device_endpoint.hpp"
@@ -24,6 +26,7 @@
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "driver/spi_master.h"
+#include "esp_camera.h"
 #include "esp_heap_caps.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -142,7 +145,23 @@ bool tft_fill(spi_device_handle_t dev, uint16_t color) {
     return ok;
 }
 
-bool screen_test() {
+// The panel stays open between calls once screen.draw_rect has started it, so a picture
+// can be sent as several pieces. screen.fill_test closes it first and starts from scratch.
+spi_device_handle_t g_tft = nullptr;
+bool g_tft_bus = false;
+
+void tft_release() {
+    if (g_tft != nullptr) spi_bus_remove_device(g_tft);
+    g_tft = nullptr;
+    if (g_tft_bus) spi_bus_free(SPI2_HOST);
+    g_tft_bus = false;
+    for (int p : {kTftSck, kTftMosi, kTftDc, kTftCs}) gpio_reset_pin(static_cast<gpio_num_t>(p));
+}
+
+// Starts the bus and the panel (sleep out, 16 bits per pixel, display on). Leaves them
+// open and returns true; on failure it closes whatever it opened.
+bool tft_open() {
+    if (g_tft != nullptr) return true;
     gpio_config_t dc{};
     dc.pin_bit_mask = 1ULL << kTftDc;
     dc.mode = GPIO_MODE_OUTPUT;
@@ -157,38 +176,195 @@ bool screen_test() {
     g_screen_error.clear();
     esp_err_t be = spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
     note("spi_bus_initialize", be);
-    if (be != ESP_OK) return false;
+    if (be != ESP_OK) {
+        tft_release();
+        return false;
+    }
+    g_tft_bus = true;
     spi_device_interface_config_t dev_cfg{};
     dev_cfg.clock_speed_hz = 20 * 1000 * 1000;
     dev_cfg.mode = 2;  // polarity 1, phase 0, as the original program
     dev_cfg.spics_io_num = kTftCs;
     dev_cfg.queue_size = 1;
-    spi_device_handle_t dev = nullptr;
-    esp_err_t ae = spi_bus_add_device(SPI2_HOST, &dev_cfg, &dev);
+    esp_err_t ae = spi_bus_add_device(SPI2_HOST, &dev_cfg, &g_tft);
     note("spi_bus_add_device", ae);
-    bool ok = ae == ESP_OK;
-    if (ok) {
-        tft_cmd(dev, 0x01);  // software reset
-        vTaskDelay(pdMS_TO_TICKS(150));
-        tft_cmd(dev, 0x11);  // sleep out
-        vTaskDelay(pdMS_TO_TICKS(120));
-        const uint8_t colmod = 0x55;  // 16 bits per pixel
-        tft_cmd(dev, 0x3A, &colmod, 1);
-        const uint8_t madctl = 0x00;
-        tft_cmd(dev, 0x36, &madctl, 1);
-        tft_cmd(dev, 0x21);  // inversion on, as most ST7789 panels need
-        tft_cmd(dev, 0x13);  // normal display mode
-        tft_cmd(dev, 0x29);  // display on
-        vTaskDelay(pdMS_TO_TICKS(50));
-        for (uint16_t color : {uint16_t{0xF800}, uint16_t{0x07E0}, uint16_t{0x001F}, uint16_t{0x0000}}) {
-            ok = tft_fill(dev, color) && ok;
-            vTaskDelay(pdMS_TO_TICKS(700));
-        }
-        spi_bus_remove_device(dev);
+    if (ae != ESP_OK) {
+        tft_release();
+        return false;
     }
-    spi_bus_free(SPI2_HOST);
-    for (int p : {kTftSck, kTftMosi, kTftDc, kTftCs}) gpio_reset_pin(static_cast<gpio_num_t>(p));
+    tft_cmd(g_tft, 0x01);  // software reset
+    vTaskDelay(pdMS_TO_TICKS(150));
+    tft_cmd(g_tft, 0x11);  // sleep out
+    vTaskDelay(pdMS_TO_TICKS(120));
+    const uint8_t colmod = 0x55;  // 16 bits per pixel
+    tft_cmd(g_tft, 0x3A, &colmod, 1);
+    const uint8_t madctl = 0x00;
+    tft_cmd(g_tft, 0x36, &madctl, 1);
+    tft_cmd(g_tft, 0x21);  // inversion on, as most ST7789 panels need
+    tft_cmd(g_tft, 0x13);  // normal display mode
+    tft_cmd(g_tft, 0x29);  // display on
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return true;
+}
+
+bool screen_test() {
+    tft_release();
+    if (!tft_open()) return false;
+    bool ok = true;
+    for (uint16_t color : {uint16_t{0xF800}, uint16_t{0x07E0}, uint16_t{0x001F}, uint16_t{0x0000}}) {
+        ok = tft_fill(g_tft, color) && ok;
+        vTaskDelay(pdMS_TO_TICKS(700));
+    }
+    tft_release();
     return ok;
+}
+
+// Draws one rectangle (already checked by parse_draw_rect) at its place on the screen.
+bool tft_draw(const dc_device::esp32::ScreenRect& r) {
+    g_screen_error.clear();
+    if (!tft_open()) return false;
+    const uint16_t x1 = static_cast<uint16_t>(r.x + r.w - 1), y1 = static_cast<uint16_t>(r.y + r.h - 1);
+    const uint8_t col[4] = {static_cast<uint8_t>(r.x >> 8), static_cast<uint8_t>(r.x & 0xFF),
+                            static_cast<uint8_t>(x1 >> 8), static_cast<uint8_t>(x1 & 0xFF)};
+    const uint8_t row[4] = {static_cast<uint8_t>(r.y >> 8), static_cast<uint8_t>(r.y & 0xFF),
+                            static_cast<uint8_t>(y1 >> 8), static_cast<uint8_t>(y1 & 0xFF)};
+    if (!tft_cmd(g_tft, 0x2A, col, 4) || !tft_cmd(g_tft, 0x2B, row, 4)) return false;
+    uint8_t* chunk = static_cast<uint8_t*>(heap_caps_malloc(4096, MALLOC_CAP_DMA));
+    if (chunk == nullptr) {
+        note("no DMA memory", ESP_ERR_NO_MEM);
+        return false;
+    }
+    uint8_t ramwr = 0x2C;
+    gpio_set_level(static_cast<gpio_num_t>(kTftDc), 0);
+    spi_transaction_t t{};
+    t.length = 8;
+    t.tx_buffer = &ramwr;
+    esp_err_t re = spi_device_polling_transmit(g_tft, &t);
+    note("RAMWR", re);
+    bool ok = re == ESP_OK;
+    gpio_set_level(static_cast<gpio_num_t>(kTftDc), 1);
+    size_t sent = 0;
+    while (ok && sent < r.pixels.size()) {
+        size_t n = std::min<size_t>(4096, r.pixels.size() - sent);
+        std::copy(r.pixels.begin() + sent, r.pixels.begin() + sent + n, chunk);
+        spi_transaction_t d{};
+        d.length = n * 8;
+        d.tx_buffer = chunk;
+        esp_err_t de = spi_device_polling_transmit(g_tft, &d);
+        note("pixel data", de);
+        ok = de == ESP_OK;
+        sent += n;
+    }
+    heap_caps_free(chunk);
+    return ok;
+}
+
+// The camera's data lines, clock and sync pins. UNVERIFIED: only SDA 4 / SCL 5 are known
+// from the board's own check. These are the usual wiring for an OV2640 on an ESP32-S3
+// board with those two control pins, and they fit the free pins this board's survey
+// shows. A frame that arrives with detail proves them; no frame means they are wrong.
+constexpr int kCamXclk = 15, kCamSda = 4, kCamScl = 5;
+constexpr int kCamD0 = 11, kCamD1 = 9, kCamD2 = 8, kCamD3 = 10, kCamD4 = 12, kCamD5 = 18, kCamD6 = 17, kCamD7 = 16;
+constexpr int kCamVsync = 6, kCamHref = 7, kCamPclk = 13;
+
+bool camera_start(std::string& error) {
+    camera_config_t c{};
+    c.pin_pwdn = -1;
+    c.pin_reset = -1;
+    c.pin_xclk = kCamXclk;
+    c.pin_sccb_sda = kCamSda;
+    c.pin_sccb_scl = kCamScl;
+    c.pin_d0 = kCamD0; c.pin_d1 = kCamD1; c.pin_d2 = kCamD2; c.pin_d3 = kCamD3;
+    c.pin_d4 = kCamD4; c.pin_d5 = kCamD5; c.pin_d6 = kCamD6; c.pin_d7 = kCamD7;
+    c.pin_vsync = kCamVsync;
+    c.pin_href = kCamHref;
+    c.pin_pclk = kCamPclk;
+    c.xclk_freq_hz = 20000000;
+    c.ledc_timer = LEDC_TIMER_0;
+    c.ledc_channel = LEDC_CHANNEL_0;
+    c.pixel_format = PIXFORMAT_RGB565;
+    c.frame_size = FRAMESIZE_HQVGA;  // 240x176: 84 KB, the board has no PSRAM
+    c.jpeg_quality = 12;
+    c.fb_count = 1;
+    c.fb_location = CAMERA_FB_IN_DRAM;
+    c.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+    c.sccb_i2c_port = -1;
+    esp_err_t e = esp_camera_init(&c);
+    if (e != ESP_OK) {
+        error = esp_err_to_name(e);
+        return false;
+    }
+    return true;
+}
+
+// Starts the camera, takes one frame, lends it to `use`, then gives it back and shuts
+// the camera down so the pins are free again. The first frames after start are often
+// not usable, so a few are thrown away.
+template <typename F>
+InvokeResult with_frame(F use) {
+    std::string why;
+    if (!camera_start(why)) {
+        return InvokeResult::failed("Could not start the camera (" + why + "). The camera pins are a guess and may be wrong");
+    }
+    camera_fb_t* fb = nullptr;
+    for (int i = 0; i < 4; ++i) {
+        if (fb != nullptr) esp_camera_fb_return(fb);
+        fb = esp_camera_fb_get();
+        if (fb == nullptr) break;
+    }
+    InvokeResult r = fb == nullptr ? InvokeResult::failed("The camera started but no frame arrived. The camera pins are a guess and may be wrong")
+                                   : use(fb);
+    if (fb != nullptr) esp_camera_fb_return(fb);
+    esp_camera_deinit();
+    return r;
+}
+
+// One RGB565 pixel (two bytes, high byte first unless `swap`) as a 0..255 brightness.
+inline uint8_t pixel_gray(const uint8_t* p, bool swap) {
+    const uint16_t v = swap ? static_cast<uint16_t>(p[1] << 8 | p[0]) : static_cast<uint16_t>(p[0] << 8 | p[1]);
+    const int r = ((v >> 11) & 0x1F) * 255 / 31, g = ((v >> 5) & 0x3F) * 255 / 63, b = (v & 0x1F) * 255 / 31;
+    return static_cast<uint8_t>((r * 77 + g * 150 + b * 29) >> 8);
+}
+
+// What the frame says (see judge_frame), from every fourth pixel.
+std::string frame_facts(const camera_fb_t* fb, bool swap) {
+    std::vector<uint8_t> gray;
+    gray.reserve(fb->len / 8);
+    for (size_t i = 0; i + 1 < fb->len; i += 8) gray.push_back(pixel_gray(fb->buf + i, swap));
+    const dc_device::esp32::ImageStats stats = dc_device::esp32::analyze_gray(gray.data(), gray.size());
+    std::string evidence;
+    const dc_device::esp32::Verdict v = dc_device::esp32::judge_frame(stats, evidence);
+    return std::string("{\"width\":") + std::to_string(fb->width) + ",\"height\":" + std::to_string(fb->height) +
+           ",\"verdict\":\"" + dc_device::esp32::verdict_name(v) + "\",\"evidence\":" + json::quote(evidence) +
+           ",\"mean\":" + json::number(stats.mean) + ",\"stddev\":" + json::number(stats.stddev) + "}";
+}
+
+bool swap_flag(const json::Value& a) {
+    const json::Value* v = a.find("swap_bytes");
+    return v != nullptr && v->is_bool() && v->boolean;
+}
+
+// Draws the frame, centred, in pieces of at most 20 rows (the same piece size
+// screen.draw_rect takes).
+bool show_frame(const camera_fb_t* fb, bool swap) {
+    const int w = fb->width, h = fb->height;
+    if (w > dc_device::esp32::kScreenWidth || h > dc_device::esp32::kScreenHeight) return false;
+    const int x0 = (dc_device::esp32::kScreenWidth - w) / 2, y0 = (dc_device::esp32::kScreenHeight - h) / 2;
+    for (int row = 0; row < h; row += 20) {
+        dc_device::esp32::ScreenRect r;
+        r.x = x0;
+        r.y = y0 + row;
+        r.w = w;
+        r.h = std::min(20, h - row);
+        r.pixels.resize(static_cast<size_t>(r.w) * r.h * 2);
+        const uint8_t* src = fb->buf + static_cast<size_t>(row) * w * 2;
+        for (size_t i = 0; i < r.pixels.size(); i += 2) {
+            r.pixels[i] = swap ? src[i + 1] : src[i];
+            r.pixels[i + 1] = swap ? src[i] : src[i + 1];
+        }
+        if (!tft_draw(r)) return false;
+    }
+    return true;
 }
 }  // namespace
 
@@ -256,6 +432,59 @@ extern "C" void app_main() {
                              : InvokeResult::failed("Could not drive the screen (" + g_screen_error + ")");
     };
     endpoint.add(sc);
+    // A picture is sent in pieces: each call draws one rectangle. 240 pixels wide and up
+    // to 20 rows is 9600 bytes, 12800 characters of Base64, inside the 16 KB body limit.
+    dc_device::esp32::CapabilitySpec draw;
+    draw.name = "screen.draw_rect";
+    draw.description =
+        "Draw one rectangle of pixels on the 240x320 screen. data is Base64 of RGB565 pixels, "
+        "high byte first, w*h of them, row by row. Send a picture as several rectangles, at most "
+        "20 rows of 240 pixels each. A person must watch the screen.";
+    draw.kind = "action";
+    draw.parameters_json =
+        R"({"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"w":{"type":"integer"},)"
+        R"("h":{"type":"integer"},"data":{"type":"string"}},"required":["x","y","w","h","data"]})";
+    draw.safety_json = R"({"max_rate_hz":5})";
+    draw.handler = [](const json::Value& a) {
+        dc_device::esp32::ScreenRect rect;
+        std::string why;
+        if (!dc_device::esp32::parse_draw_rect(a, rect, why)) return InvokeResult::invalid(why);
+        return tft_draw(rect) ? InvokeResult::success(R"({"drawn":true})")
+                              : InvokeResult::failed("Could not drive the screen (" + g_screen_error + ")");
+    };
+    endpoint.add(draw);
+
+    // The camera pins are a guess (see kCamXclk): these two say whether the guess is right.
+    dc_device::esp32::CapabilitySpec check;
+    check.name = "camera.check_frame";
+    check.description =
+        "Take one camera frame and say whether it looks real: frame size, brightness and a verdict. "
+        "A frame with detail means the camera wiring works. Does not return the picture.";
+    check.kind = "sensor";
+    check.parameters_json = R"({"type":"object","properties":{"swap_bytes":{"type":"boolean"}}})";
+    check.safety_json = R"({"max_rate_hz":0.5})";
+    check.handler = [](const json::Value& a) {
+        const bool swap = swap_flag(a);
+        return with_frame([swap](camera_fb_t* fb) { return InvokeResult::success(frame_facts(fb, swap)); });
+    };
+    endpoint.add(check);
+    dc_device::esp32::CapabilitySpec show;
+    show.name = "camera.show_on_screen";
+    show.description =
+        "Take one camera frame and draw it on this board's screen. A person must watch the screen. "
+        "If the colours look wrong, call again with swap_bytes true.";
+    show.kind = "action";
+    show.parameters_json = R"({"type":"object","properties":{"swap_bytes":{"type":"boolean"}}})";
+    show.safety_json = R"({"max_rate_hz":0.5})";
+    show.handler = [](const json::Value& a) {
+        const bool swap = swap_flag(a);
+        return with_frame([swap](camera_fb_t* fb) {
+            const std::string facts = frame_facts(fb, swap);
+            if (!show_frame(fb, swap)) return InvokeResult::failed("Could not draw the frame (" + g_screen_error + ")");
+            return InvokeResult::success(facts);
+        });
+    };
+    endpoint.add(show);
 
 #if !CONFIG_DC_DEVICE_RELEASE
     // Debugging aid: try a microphone on given pins. Drives sck and ws.
@@ -397,6 +626,8 @@ extern "C" void app_main() {
         return;
     }
     http_config.port = CONFIG_DC_DEVICE_HTTP_PORT;
+    // screen.draw_rect carries pixels in the request body; the default 2 KB is too small.
+    http_config.max_body_bytes = 16384;
 
     // Network: whatever was stored by USB setup. A network compiled in is only for
     // development and is left out of release builds.

@@ -12,6 +12,7 @@
 #include "dc_device_i2c_ids.hpp"
 #include "dc_device_pins.hpp"
 #include "dc_device_selfcheck.hpp"
+#include "dc_device_image_analysis.hpp"
 #include "dc_device_setup.hpp"
 #include "dc_device_json.hpp"
 
@@ -913,6 +914,23 @@ static void test_audio_analysis() {
     CHECK(tone_gain(real.data(), n, again.data(), n, rate, 880.0) < 3);
 }
 
+static void test_image_analysis() {
+    using namespace dc_device::esp32;
+    std::string ev;
+    CHECK(judge_frame(analyze_gray(nullptr, 0), ev) == Verdict::Failed);
+    std::vector<uint8_t> flat(1000, 0);
+    CHECK(judge_frame(analyze_gray(flat.data(), flat.size()), ev) == Verdict::Failed);
+    CHECK(ev.find("stuck") != std::string::npos);
+    std::vector<uint8_t> dark(1000, 3);
+    dark[10] = 4;  // sensor noise only
+    CHECK(judge_frame(analyze_gray(dark.data(), dark.size()), ev) == Verdict::Unverified);
+    std::vector<uint8_t> ramp(1000);
+    for (size_t i = 0; i < ramp.size(); ++i) ramp[i] = static_cast<uint8_t>(i % 256);
+    ImageStats st = analyze_gray(ramp.data(), ramp.size());
+    CHECK(st.min == 0 && st.max == 255 && st.pixels == 1000);
+    CHECK(judge_frame(st, ev) == Verdict::Ok);
+}
+
 // ---- USB setup protocol (docs/usb-setup-protocol-v0.1.md) ----------------------
 
 struct SetupRig {
@@ -1170,6 +1188,7 @@ int main() {
     test_scan_pins();
     test_i2c_ids();
     test_audio_analysis();
+    test_image_analysis();
     test_setup_protocol();
     if (g_failures == 0) {
         std::printf("all tests passed\n");
